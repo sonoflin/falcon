@@ -63,6 +63,19 @@ export const REGION_BBOX = {
 } as const;
 
 /**
+ * Map camera limits — Phoenix East Valley (Falcon Field / Mesa / Gilbert / north Mesa).
+ * Keeps the map from opening to a world view.
+ */
+export const MAP_VIEW = {
+  center: [FFZ.lon, FFZ.lat] as [number, number],
+  zoom: 12,
+  minZoom: 10,
+  maxZoom: 16,
+  /** [west, south, east, north] */
+  maxBounds: [-112.05, 33.25, -111.45, 33.65] as [number, number, number, number],
+} as const;
+
+/**
  * Approximate west edge of field / Roosevelt Irrigation Canal corridor.
  * Helicopters are asked to remain east of the canal west of the runways.
  */

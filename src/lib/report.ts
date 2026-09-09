@@ -5,7 +5,11 @@ import {
   filterTrackToWindow,
 } from "./adsblol";
 import { FFZ, OPENSKY } from "./constants";
-import { fetchAirportFlights, fetchTrack } from "./opensky";
+import {
+  fetchAirportFlights,
+  fetchTrack,
+  hasOpenskyCredentials,
+} from "./opensky";
 import type { AnalyzedFlight, ReportResponse, TrackPoint } from "./types";
 
 const MAX_TRACKS_ANON = 18;
@@ -105,6 +109,16 @@ export async function buildReport(
     string,
     { registration: string | null; type: string | null }
   >();
+  const credsConfigured = hasOpenskyCredentials();
+  if (!credsConfigured) {
+    limitations.push(
+      "OPENSKY_CLIENT_ID / OPENSKY_CLIENT_SECRET are not set on this deployment — using anonymous OpenSky limits (or ADS-B.lol fallback)."
+    );
+  } else {
+    limitations.push(
+      "OpenSky OAuth credentials are configured on this deployment."
+    );
+  }
 
   try {
     const result = await fetchAirportFlights(FFZ.icao, cappedBegin, end);
@@ -112,7 +126,9 @@ export async function buildReport(
     mode = result.mode;
   } catch (err) {
     const msg = err instanceof Error ? err.message : "OpenSky unavailable";
-    limitations.push(`OpenSky airport list failed (${msg}). Using ADS-B.lol nearby fallback.`);
+    limitations.push(
+      `OpenSky airport list failed (${msg}). Using ADS-B.lol nearby fallback.`
+    );
     const fb = await discoverFlightsViaAdsbLol(cappedBegin, end);
     rawFlights = fb.flights;
     metaByIcao = fb.metaByIcao;

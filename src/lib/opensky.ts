@@ -27,11 +27,44 @@ function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-function getCredentials() {
+export function getCredentials() {
   const clientId = process.env.OPENSKY_CLIENT_ID?.trim();
   const clientSecret = process.env.OPENSKY_CLIENT_SECRET?.trim();
   if (clientId && clientSecret) return { clientId, clientSecret };
   return null;
+}
+
+export function hasOpenskyCredentials(): boolean {
+  return getCredentials() != null;
+}
+
+function formatFetchFailure(context: string, err: unknown): Error {
+  const base = err instanceof Error ? err : new Error(String(err));
+  const cause =
+    base.cause instanceof Error
+      ? base.cause.message
+      : typeof base.cause === "string"
+        ? base.cause
+        : "";
+  const detail = [base.message, cause].filter(Boolean).join(" — ");
+  if (/fetch failed|network|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|cert/i.test(detail)) {
+    return new Error(
+      `${context} network failure (${detail}). OpenSky may be unreachable from this host.`
+    );
+  }
+  return new Error(`${context}: ${detail}`);
+}
+
+async function safeFetch(
+  url: string,
+  init: RequestInit,
+  context: string
+): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch (err) {
+    throw formatFetchFailure(context, err);
+  }
 }
 
 export async function getAccessToken(): Promise<{
@@ -51,15 +84,24 @@ export async function getAccessToken(): Promise<{
     client_secret: creds.clientSecret,
   });
 
-  const res = await fetch(OPENSKY.tokenUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body,
-    cache: "no-store",
-  });
+  const res = await safeFetch(
+    OPENSKY.tokenUrl,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body,
+      cache: "no-store",
+    },
+    "OpenSky OAuth token"
+  );
 
   if (!res.ok) {
     const text = await res.text();
+    if (res.status === 401 || res.status === 403) {
+      throw new Error(
+        `OpenSky OAuth rejected credentials (${res.status}). Check OPENSKY_CLIENT_ID / OPENSKY_CLIENT_SECRET.`
+      );
+    }
     throw new Error(`OpenSky token error ${res.status}: ${text.slice(0, 200)}`);
   }
 
@@ -81,10 +123,14 @@ async function openskyFetch(
 ): Promise<Response> {
   const headers: HeadersInit = { Accept: "application/json" };
   if (token) headers.Authorization = `Bearer ${token}`;
-  const res = await fetch(`${OPENSKY.apiBase}${path}`, {
-    headers,
-    cache: "no-store",
-  });
+  const res = await safeFetch(
+    `${OPENSKY.apiBase}${path}`,
+    {
+      headers,
+      cache: "no-store",
+    },
+    `OpenSky API ${path.split("?")[0]}`
+  );
   if (res.status === 429 && attempt < 2) {
     const wait = 800 * Math.pow(2, attempt) + Math.floor(Math.random() * 200);
     await sleep(wait);
@@ -158,7 +204,12 @@ async function fetchFlightsEndpoint(
     }
     if (res.status === 429) {
       throw new Error(
-        "OpenSky rate limit reached. Wait a minute or add OPENSKY_CLIENT_ID / OPENSKY_CLIENT_SECRET for daily staff use."
+        "OpenSky rate limit reached. Wait a minute or ensure OPENSKY_CLIENT_ID / OPENSKY_CLIENT_SECRET are set on this deployment and redeployed."
+      );
+    }
+    if (res.status === 401 || res.status === 403) {
+      throw new Error(
+        `OpenSky ${kind} unauthorized (${res.status}). Token may be invalid — re-check API client credentials.`
       );
     }
     if (!res.ok) {
@@ -183,7 +234,7 @@ export async function fetchAirportFlights(
   end: number
 ): Promise<{ flights: OpenSkyFlight[]; mode: AuthMode }> {
   const { token, mode } = await getAccessToken();
-  const paceMs = mode === "anonymous" ? 1200 : 250;
+  const paceMs = mode === "oauth" ? 250 : 1200;
 
   // Departures first (most relevant for noise screening), then arrivals.
   const deps = await fetchFlightsEndpoint(

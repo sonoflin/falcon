@@ -142,8 +142,10 @@ export function FlightDetailClient({
       </div>
 
       <p className="text-xs text-stone-500">
-        {flight.track.length} track points from {flight.source}. Screening only — not a
-        regulatory determination.
+        {flight.track.length >= 2
+          ? `${flight.track.length} track points from ${flight.source}.`
+          : `No usable track polyline (${flight.source}).`}{" "}
+        Screening only — not a regulatory determination.
       </p>
     </div>
   );

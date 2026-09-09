@@ -8,17 +8,47 @@ import {
   Marker,
   NavigationControl,
   Popup,
+  setWorkerUrl,
 } from "maplibre-gl";
-import "maplibre-gl/dist/maplibre-gl.css";
-import { FFZ } from "@/lib/constants";
+import { FFZ, MAP_VIEW } from "@/lib/constants";
 import { mesaFeature } from "@/lib/geography";
 import type { Finding, TrackPoint } from "@/lib/types";
+
+// Turbopack hashes MapLibre worker assets without rewriting the worker's
+// relative `./maplibre-gl-shared.mjs` import. Serve both files from /public.
+if (typeof window !== "undefined") {
+  setWorkerUrl("/maplibre/maplibre-gl-worker.mjs");
+}
 
 type Props = {
   track: TrackPoint[];
   findings?: Finding[];
   className?: string;
 };
+
+function eastValleyBounds() {
+  const [west, south, east, north] = MAP_VIEW.maxBounds;
+  return new LngLatBounds([west, south], [east, north]);
+}
+
+function fitToTrackOrRegion(map: Map, track: TrackPoint[]) {
+  if (track.length >= 2) {
+    const bounds = new LngLatBounds();
+    track.forEach((p) => bounds.extend([p.lon, p.lat]));
+    bounds.extend([FFZ.lon, FFZ.lat]);
+    map.fitBounds(bounds, {
+      padding: 48,
+      maxZoom: 13,
+      duration: 600,
+    });
+    return;
+  }
+  map.fitBounds(eastValleyBounds(), {
+    padding: 24,
+    maxZoom: MAP_VIEW.zoom,
+    duration: 400,
+  });
+}
 
 export function FlightMap({ track, findings = [], className }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -30,7 +60,10 @@ export function FlightMap({ track, findings = [], className }: Props) {
       properties: {},
       geometry: {
         type: "LineString" as const,
-        coordinates: track.map((p) => [p.lon, p.lat]),
+        coordinates:
+          track.length >= 2
+            ? track.map((p) => [p.lon, p.lat] as [number, number])
+            : ([] as [number, number][]),
       },
     }),
     [track]
@@ -46,7 +79,7 @@ export function FlightMap({ track, findings = [], className }: Props) {
           properties: { severity: f.severity, summary: f.summary },
           geometry: {
             type: "Point" as const,
-            coordinates: [f.lon!, f.lat!],
+            coordinates: [f.lon!, f.lat!] as [number, number],
           },
         })),
     }),
@@ -76,8 +109,11 @@ export function FlightMap({ track, findings = [], className }: Props) {
           },
         ],
       },
-      center: [FFZ.lon, FFZ.lat],
-      zoom: 11,
+      center: MAP_VIEW.center,
+      zoom: MAP_VIEW.zoom,
+      minZoom: MAP_VIEW.minZoom,
+      maxZoom: MAP_VIEW.maxZoom,
+      maxBounds: MAP_VIEW.maxBounds,
       attributionControl: {},
     });
 
@@ -146,12 +182,7 @@ export function FlightMap({ track, findings = [], className }: Props) {
         .setPopup(new Popup().setText("KFFZ Falcon Field"))
         .addTo(map);
 
-      if (track.length) {
-        const bounds = new LngLatBounds();
-        track.forEach((p) => bounds.extend([p.lon, p.lat]));
-        bounds.extend([FFZ.lon, FFZ.lat]);
-        map.fitBounds(bounds, { padding: 48, maxZoom: 13 });
-      }
+      fitToTrackOrRegion(map, track);
     });
 
     mapRef.current = map;
@@ -169,20 +200,23 @@ export function FlightMap({ track, findings = [], className }: Props) {
     const findSrc = map.getSource("findings") as GeoJSONSource | undefined;
     trackSrc?.setData(line);
     findSrc?.setData(highlights);
-    if (track.length) {
-      const bounds = new LngLatBounds();
-      track.forEach((p) => bounds.extend([p.lon, p.lat]));
-      bounds.extend([FFZ.lon, FFZ.lat]);
-      map.fitBounds(bounds, { padding: 48, maxZoom: 13, duration: 600 });
-    }
+    fitToTrackOrRegion(map, track);
   }, [line, highlights, track]);
 
   return (
-    <div
-      ref={containerRef}
-      className={className ?? "h-full w-full min-h-[280px] rounded-sm overflow-hidden"}
-      role="img"
-      aria-label="Flight track map"
-    />
+    <div className={`relative ${className ?? "h-full w-full min-h-[280px]"}`}>
+      <div
+        ref={containerRef}
+        className="h-full w-full min-h-[280px] rounded-sm overflow-hidden"
+        role="img"
+        aria-label="Flight track map"
+      />
+      {track.length < 2 && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-stone-950/70 px-3 py-2 text-xs text-amber-50">
+          No track points for this operation — map focused on Falcon Field /
+          East Valley.
+        </div>
+      )}
+    </div>
   );
 }

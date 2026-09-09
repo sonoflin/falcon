@@ -26,30 +26,32 @@ export async function GET(req: NextRequest, { params }: Params) {
     const end = nowUnix();
     const begin = Math.max(firstSeen - 3600, end - 36 * 3600);
 
-    let track = filterTrackToWindow(
-      (await fetchDayTrace(icao24)).track,
-      begin,
-      end + 3600
-    );
-    let source = "ADS-B.lol day trace";
-    let registration: string | null = null;
-    let aircraftType: string | null = null;
-
     const day = await fetchDayTrace(icao24);
-    registration = day.registration;
-    aircraftType = day.aircraftType;
-    track = filterTrackToWindow(day.track, begin, end + 3600);
+    let track = filterTrackToWindow(day.track, begin, end + 3600);
+    let source = "ADS-B.lol day trace";
+    const registration = day.registration;
+    const aircraftType = day.aircraftType;
 
     if (track.length < 3) {
       const timeParam = req.nextUrl.searchParams.get("time");
       const time = timeParam ? Number(timeParam) : firstSeen + 60;
-      track = await fetchTrack(icao24, time);
-      source = "OpenSky Network track";
+      try {
+        const openskyTrack = await fetchTrack(icao24, time);
+        if (openskyTrack.length) {
+          track = openskyTrack;
+          source = "OpenSky Network track";
+        }
+      } catch {
+        // Keep ADS-B.lol result (possibly empty) and report honestly below.
+      }
     }
 
     if (!track.length) {
       return NextResponse.json(
-        { error: "No track available for this flight (coverage or age limit)." },
+        {
+          error:
+            "No track points for this operation (ADS-B coverage gap or track age limit).",
+        },
         { status: 404 }
       );
     }
