@@ -93,6 +93,10 @@ export function FlightDetailClient({
           <p className="text-sm text-stone-500 mt-1">
             {formatPhoenix(flight.firstSeen)} – {formatPhoenix(flight.lastSeen)} MST
           </p>
+          <p className="mt-2 text-xs text-stone-500 max-w-lg">
+            Screening flags / review candidates only — voluntary Fly Friendly guidance,
+            not a regulatory determination.
+          </p>
         </div>
         <a
           href={flight.verifyUrl}
@@ -115,7 +119,7 @@ export function FlightDetailClient({
             patternAltFt={patternFor(flight.category)}
           />
           <h2 className="text-sm uppercase tracking-wider text-stone-500 pt-2">
-            Evidence
+            Screening flags
           </h2>
           {flight.findings.length === 0 ? (
             <p className="text-sm text-stone-600">No screening flags on this track.</p>
@@ -123,9 +127,12 @@ export function FlightDetailClient({
             <ul className="space-y-4">
               {flight.findings.map((f) => (
                 <li key={f.code + (f.time || 0)} className="border-l-2 border-teal-800 pl-3">
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <span className="text-[11px] uppercase tracking-wide text-stone-500">
                       {f.severity}
+                    </span>
+                    <span className="text-[11px] font-mono text-teal-900/80">
+                      {f.code}
                     </span>
                     <span className="text-sm font-medium text-stone-900">{f.summary}</span>
                   </div>
@@ -145,7 +152,8 @@ export function FlightDetailClient({
         {flight.track.length >= 2
           ? `${flight.track.length} track points from ${flight.source}.`
           : `No usable track polyline (${flight.source}).`}{" "}
-        Screening only — not a regulatory determination.
+        Voluntary Fly Friendly screening only — not a regulatory determination.
+        Non-goals from ADS-B: power/RPM, Vy, PAPI, hover time, ATC/wind justification.
       </p>
     </div>
   );

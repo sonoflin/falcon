@@ -19,8 +19,9 @@ export default function HomePage() {
             FFZ Ops Review
           </h1>
           <p className="mt-4 max-w-xl text-base sm:text-lg text-stone-600 leading-relaxed">
-            Overnight and off-hours flight screening for KFFZ — altitudes, tracks, and
-            verifiable evidence when staff cannot monitor in person.
+            Overnight and off-hours ADS-B screening for KFFZ Fly Friendly / noise
+            guidance — altitudes, tracks, and verifiable evidence when staff cannot
+            monitor in person. Screening flags are review candidates only.
           </p>
         </div>
       </div>

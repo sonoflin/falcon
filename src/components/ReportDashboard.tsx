@@ -67,6 +67,25 @@ export function ReportDashboard() {
 
   return (
     <div className="flex flex-col gap-8">
+      <aside
+        className="border border-teal-900/20 bg-teal-950/[0.04] px-4 py-3 text-sm text-stone-700 leading-relaxed"
+        role="note"
+      >
+        <p className="font-medium text-stone-900">
+          Voluntary Fly Friendly screening — not enforcement
+        </p>
+        <p className="mt-1">
+          Flags below are review candidates against Mesa / KFFZ noise-abatement
+          guidance. Procedures are voluntary. This is screening only — not a
+          regulatory determination, citation, or “violator” list. Wind, ATC, and
+          coverage gaps can explain many tracks.
+        </p>
+        <p className="mt-2 text-xs text-stone-500">
+          Not screened from ADS-B: power/RPM/blade slap, Vy, PAPI, hover time, or
+          ATC/wind justification.
+        </p>
+      </aside>
+
       <section className="space-y-4">
         <TimePresets value={preset} onChange={setPreset} />
         {preset === "custom" && (
@@ -109,8 +128,8 @@ export function ReportDashboard() {
                 {formatPhoenix(data.window.end)} MST
               </p>
               <p className="mt-1 text-2xl sm:text-3xl font-semibold tracking-tight text-stone-900">
-                {data.meta.flaggedCount} potential{" "}
-                {data.meta.flaggedCount === 1 ? "issue" : "issues"}
+                {data.meta.flaggedCount} screening{" "}
+                {data.meta.flaggedCount === 1 ? "flag" : "flags"}
                 <span className="text-base font-normal text-stone-500 ml-2">
                   from {data.meta.flightCount} tracked ops
                 </span>
@@ -118,7 +137,9 @@ export function ReportDashboard() {
             </>
           ) : (
             <p className="text-stone-600 text-sm">
-              {loading ? "Pulling OpenSky tracks for KFFZ…" : "Select a window to review."}
+              {loading
+                ? "Pulling ADS-B tracks for KFFZ…"
+                : "Select a window to review."}
             </p>
           )}
         </div>
@@ -167,7 +188,7 @@ export function ReportDashboard() {
           <section className="flex flex-col sm:flex-row gap-3 print:hidden">
             <input
               type="search"
-              placeholder="Search callsign, ICAO24, registration…"
+              placeholder="Search callsign, ICAO24, registration, code…"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               className="flex-1 border border-stone-300 bg-white/80 px-3 py-2 text-sm"

@@ -23,14 +23,18 @@ export function FlightList({ flights, query = "", severity = "all" }: Props) {
       f.callsign?.toLowerCase().includes(q) ||
       f.icao24.includes(q) ||
       f.registration?.toLowerCase().includes(q) ||
-      f.findings.some((x) => x.summary.toLowerCase().includes(q))
+      f.findings.some(
+        (x) =>
+          x.summary.toLowerCase().includes(q) ||
+          x.code.toLowerCase().includes(q)
+      )
     );
   });
 
   if (!filtered.length) {
     return (
       <div className="py-16 text-center text-stone-600">
-        <p className="text-lg text-stone-800">No flagged flights in this window</p>
+        <p className="text-lg text-stone-800">No screening flags in this window</p>
         <p className="mt-2 text-sm max-w-md mx-auto">
           Either operations screened clean, coverage was thin, or try a wider preset.
         </p>
@@ -65,6 +69,9 @@ export function FlightList({ flights, query = "", severity = "all" }: Props) {
                 </span>
               </div>
               <p className="text-sm text-stone-700 mt-1 truncate">
+                <span className="font-mono text-[11px] text-stone-500 mr-2">
+                  {f.findings[0]?.code}
+                </span>
                 {f.findings[0]?.summary}
                 {f.findings.length > 1 ? ` · +${f.findings.length - 1} more` : ""}
               </p>

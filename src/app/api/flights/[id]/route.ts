@@ -80,7 +80,8 @@ export async function GET(req: NextRequest, { params }: Params) {
         estDepartureAirportHorizDistance: null,
         estArrivalAirportHorizDistance: null,
       },
-      track
+      track,
+      { aircraftType }
     );
 
     return NextResponse.json({

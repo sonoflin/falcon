@@ -1,18 +1,27 @@
 import {
   DEPARTURE_CLIMB_TARGET_MSL,
   FFZ,
+  HELI_CANAL,
+  HELI_TYPE_CODES,
   HELI_WEST_LON,
   PATTERN_ALT_MSL,
   PREFERRED_DEPARTURE_HEADING_MAX,
   PREFERRED_DEPARTURE_HEADING_MIN,
   RADII_NM,
+  TURBINE_TYPE_CODES,
 } from "./constants";
 import {
+  alongRunwaySm,
   bearingDeg,
   distFromFfzNm,
+  headingDiff,
+  heliRouteSoftMiss,
   isInMesaCityLimits,
+  isLikelyDownwindAbeam,
+  isLikelyFinalOrBase,
   isNorthOfField,
-  isWestOfHeliCanal,
+  isWestOfHeliCanalAdjacent,
+  lateralOffsetFromRunwaySm,
   smBetween,
 } from "./geography";
 import { formatPhoenix, isInQuietHours } from "./time";
@@ -35,10 +44,35 @@ function maxSeverity(findings: Finding[]): Severity | null {
   }, "low");
 }
 
+function categoryFromTypeDesignator(
+  type: string | null | undefined
+): AnalyzedFlight["category"] | null {
+  if (!type) return null;
+  const t = type.trim().toUpperCase();
+  if (!t) return null;
+  if (HELI_TYPE_CODES.has(t) || /^[RH]\d|^EC|^AS5|^UH|^B0[46]/.test(t)) {
+    return "helicopter";
+  }
+  if (TURBINE_TYPE_CODES.has(t) || /^(C25|C56|LJ|CL3|FA5|E5)/.test(t)) {
+    return "turbine";
+  }
+  // Common piston trainers / singles
+  if (
+    /^(P28|C172|C152|C182|C206|DA40|DA42|SR2|BE36|BE35|M20|PA2|PA3|RV)/.test(t)
+  ) {
+    return "piston";
+  }
+  return null;
+}
+
 function inferCategory(
   callsign: string | null,
-  track: TrackPoint[]
+  track: TrackPoint[],
+  aircraftType?: string | null
 ): AnalyzedFlight["category"] {
+  const fromType = categoryFromTypeDesignator(aircraftType);
+  if (fromType) return fromType;
+
   let maxGs = 0;
   for (let i = 1; i < track.length; i++) {
     const a = track[i - 1];
@@ -121,11 +155,17 @@ function countQuietHourCircuits(track: TrackPoint[]): {
   return { count: Math.max(samples.length, approaches), samples };
 }
 
+export type AnalyzeOptions = {
+  aircraftType?: string | null;
+};
+
 export function analyzeFlight(
   flight: OpenSkyFlight,
-  track: TrackPoint[]
+  track: TrackPoint[],
+  options?: AnalyzeOptions
 ): AnalyzedFlight {
-  const category = inferCategory(flight.callsign, track);
+  const aircraftType = options?.aircraftType ?? null;
+  const category = inferCategory(flight.callsign, track, aircraftType);
   const patternAlt = expectedPatternAlt(category);
   const findings: Finding[] = [];
   const callsign = flight.callsign;
@@ -135,11 +175,34 @@ export function analyzeFlight(
     (p) => isInMesaCityLimits(p.lat, p.lon) || isNorthOfField(p.lat)
   );
 
+  // Index track for previous-altitude lookups
+  const prevAltByTime = new Map<number, number | null>();
+  for (let i = 1; i < track.length; i++) {
+    prevAltByTime.set(track[i].time, track[i - 1].altFt);
+  }
+
+  // --- BELOW_PATTERN_ALT: downwind/abeam only (exclude final/base) ---
   const lowPatternPoints = track.filter((p) => {
     if (p.onGround || p.altFt == null) return false;
     const d = distFromFfzNm(p.lat, p.lon);
-    if (d > RADII_NM.pattern || d < 0.15) return false;
-    return p.altFt < patternAlt - 150 && p.altFt > FFZ.elevFt + 200;
+    if (d > RADII_NM.pattern || d < 0.2) return false;
+    if (p.altFt >= patternAlt - 150 || p.altFt <= FFZ.elevFt + 200) return false;
+    if (
+      isLikelyFinalOrBase(
+        p.lat,
+        p.lon,
+        p.trackDeg,
+        p.altFt,
+        prevAltByTime.get(p.time) ?? null
+      )
+    ) {
+      return false;
+    }
+    // Prefer downwind/abeam geometry; still allow other off-final low pattern points
+    if (!isLikelyDownwindAbeam(p.lat, p.lon) && d < RADII_NM.finalApproachNm) {
+      return false;
+    }
+    return true;
   });
   if (lowPatternPoints.length >= 2) {
     const worst = lowPatternPoints.reduce((a, b) =>
@@ -149,11 +212,11 @@ export function analyzeFlight(
       code: "BELOW_PATTERN_ALT",
       severity:
         worst.altFt != null && worst.altFt < patternAlt - 400 ? "high" : "medium",
-      summary: `Below expected pattern altitude near field (${patternAlt.toLocaleString()} ft MSL)`,
+      summary: `Below expected pattern altitude on downwind/abeam (${patternAlt.toLocaleString()} ft MSL)`,
       evidence: [
         `Lowest observed ${worst.altFt?.toLocaleString()} ft MSL at ${formatPhoenix(worst.time)} MST`,
-        `Distance from KFFZ ≈ ${distFromFfzNm(worst.lat, worst.lon).toFixed(2)} NM`,
-        `${lowPatternPoints.length} track points below ${patternAlt - 150} ft MSL within ${RADII_NM.pattern} NM`,
+        `Distance from KFFZ ≈ ${distFromFfzNm(worst.lat, worst.lon).toFixed(2)} NM · lateral offset ${lateralOffsetFromRunwaySm(worst.lat, worst.lon).toFixed(2)} SM`,
+        `${lowPatternPoints.length} track points below ${patternAlt - 150} ft MSL (final/base excluded)`,
       ],
       lat: worst.lat,
       lon: worst.lon,
@@ -162,6 +225,7 @@ export function analyzeFlight(
     });
   }
 
+  // --- SLOW_DEPARTURE_CLIMB ---
   if (track.filter((p) => !p.onGround).length >= 3) {
     let depIdx = -1;
     for (let i = 0; i < track.length; i++) {
@@ -198,7 +262,7 @@ export function analyzeFlight(
           evidence: [
             `Altitude ${atClimbCheck.altFt.toLocaleString()} ft MSL at ${distFromFfzNm(atClimbCheck.lat, atClimbCheck.lon).toFixed(2)} NM from KFFZ`,
             `Time ${formatPhoenix(atClimbCheck.time)} MST`,
-            `Climb target used for screening: ${DEPARTURE_CLIMB_TARGET_MSL.toLocaleString()} ft MSL`,
+            `Climb target used for screening: ${DEPARTURE_CLIMB_TARGET_MSL.toLocaleString()} ft MSL (Vy / best-rate not measurable from ADS-B)`,
           ],
           lat: atClimbCheck.lat,
           lon: atClimbCheck.lon,
@@ -209,32 +273,47 @@ export function analyzeFlight(
     }
   }
 
+  // --- WIDE_PATTERN: lateral offset from runway centerline ---
   const patternPts = track.filter((p) => {
     if (p.onGround || p.altFt == null) return false;
-    const d = distFromFfzNm(p.lat, p.lon);
+    if (!isLikelyDownwindAbeam(p.lat, p.lon)) return false;
     return (
-      d >= 0.4 &&
-      d <= 3 &&
       p.altFt < patternAlt + 500 &&
       p.altFt > FFZ.elevFt + 300
     );
   });
   const wide = patternPts.filter(
-    (p) => smBetween(p.lat, p.lon, FFZ.lat, FFZ.lon) > RADII_NM.widePatternSm
+    (p) => lateralOffsetFromRunwaySm(p.lat, p.lon) > RADII_NM.widePatternSm
   );
   if (wide.length >= 4) {
     const farthest = wide.reduce((a, b) =>
-      smBetween(a.lat, a.lon, FFZ.lat, FFZ.lon) >
-      smBetween(b.lat, b.lon, FFZ.lat, FFZ.lon)
+      lateralOffsetFromRunwaySm(a.lat, a.lon) >
+      lateralOffsetFromRunwaySm(b.lat, b.lon)
         ? a
         : b
+    );
+    const offset = lateralOffsetFromRunwaySm(farthest.lat, farthest.lon);
+    const fromEnd = Math.min(
+      smBetween(
+        farthest.lat,
+        farthest.lon,
+        FFZ.rwy4Threshold.lat,
+        FFZ.rwy4Threshold.lon
+      ),
+      smBetween(
+        farthest.lat,
+        farthest.lon,
+        FFZ.rwy22Threshold.lat,
+        FFZ.rwy22Threshold.lon
+      )
     );
     findings.push({
       code: "WIDE_PATTERN",
       severity: "low",
-      summary: `Pattern flown wider than ~${RADII_NM.widePatternSm} SM from field`,
+      summary: `Pattern flown wider than ~${RADII_NM.widePatternSm} SM from runway centerline`,
       evidence: [
-        `Farthest pattern point ${smBetween(farthest.lat, farthest.lon, FFZ.lat, FFZ.lon).toFixed(2)} SM from KFFZ`,
+        `Largest lateral offset ${offset.toFixed(2)} SM from 4/22 centerline`,
+        `≈ ${fromEnd.toFixed(2)} SM from nearest runway end (Chart Supp ~¾ mi intent)`,
         `Altitude ${farthest.altFt?.toLocaleString()} ft MSL at ${formatPhoenix(farthest.time)} MST`,
         `Expected downwind roughly 0.75–1.0 SM`,
       ],
@@ -245,14 +324,16 @@ export function analyzeFlight(
     });
   }
 
+  // --- Quiet hours: NIGHT_REPETITIVE vs QUIET_HOUR_ACTIVITY ---
   const circuits = countQuietHourCircuits(track);
   if (circuits.count >= 2) {
     findings.push({
       code: "NIGHT_REPETITIVE",
       severity: circuits.count >= 4 ? "high" : "medium",
-      summary: `Repetitive low operations during 10:00 p.m.–5:30 a.m. (${circuits.count} circuits/approaches)`,
+      summary: `Repetitive circuit/approach cycles in quiet hours (${circuits.count}) — T&G/training discouraged 22:00–05:30`,
       evidence: [
         `Detected ≈ ${circuits.count} quiet-hour circuit/approach cycles near KFFZ`,
+        `Quiet window 22:00–05:30 Arizona (0500–1230Z Chart Supp)`,
         ...circuits.samples.slice(0, 3).map(
           (p) =>
             `${formatPhoenix(p.time)} MST — ${p.altFt?.toLocaleString()} ft MSL @ ${distFromFfzNm(p.lat, p.lon).toFixed(2)} NM`
@@ -264,7 +345,6 @@ export function analyzeFlight(
       altFt: circuits.samples[0]?.altFt,
     });
   } else {
-    // Surface quiet-hour presence near the field for overnight review (not necessarily repetitive)
     const quietNear = track.filter(
       (p) =>
         !p.onGround &&
@@ -278,13 +358,15 @@ export function analyzeFlight(
         (a.altFt ?? 99999) < (b.altFt ?? 99999) ? a : b
       );
       findings.push({
-        code: "NIGHT_REPETITIVE",
+        code: "QUIET_HOUR_ACTIVITY",
         severity: "low",
-        summary: "Quiet-hour activity near the field (10:00 p.m.–5:30 a.m.)",
+        summary:
+          "Quiet-hour presence near field (not clearly repetitive) — T&G/training N/A 22:00–05:30",
         evidence: [
           `${quietNear.length} track points within 3 NM during quiet hours`,
           `Lowest ${worst.altFt?.toLocaleString()} ft MSL at ${formatPhoenix(worst.time)} MST`,
           `Distance ${distFromFfzNm(worst.lat, worst.lon).toFixed(2)} NM from KFFZ`,
+          `Screening cue only — single transit/approach is not “repetitive ops”`,
         ],
         lat: worst.lat,
         lon: worst.lon,
@@ -294,6 +376,7 @@ export function analyzeFlight(
     }
   }
 
+  // --- LOW_OVER_MESA ---
   const mesaLow = track.filter((p) => {
     if (p.onGround || p.altFt == null) return false;
     if (!isInMesaCityLimits(p.lat, p.lon)) return false;
@@ -330,6 +413,94 @@ export function analyzeFlight(
     });
   }
 
+  // --- NON_PREFERRED_DEPARTURE (calm-wind preference assumed; wind/ATC may justify) ---
+  if (category !== "helicopter") {
+    let liftoffIdx = -1;
+    for (let i = 1; i < track.length; i++) {
+      const prev = track[i - 1];
+      const p = track[i];
+      if (
+        prev.onGround &&
+        !p.onGround &&
+        distFromFfzNm(p.lat, p.lon) < 1.2
+      ) {
+        liftoffIdx = i;
+        break;
+      }
+    }
+    if (liftoffIdx < 0) {
+      // Fallback: first airborne near field climbing
+      for (let i = 0; i < track.length; i++) {
+        const p = track[i];
+        if (
+          !p.onGround &&
+          p.altFt != null &&
+          p.altFt > FFZ.elevFt + 80 &&
+          p.altFt < FFZ.elevFt + 600 &&
+          distFromFfzNm(p.lat, p.lon) < 0.8
+        ) {
+          liftoffIdx = i;
+          break;
+        }
+      }
+    }
+
+    if (liftoffIdx >= 0) {
+      const depSlice = track
+        .slice(liftoffIdx, liftoffIdx + 40)
+        .filter((p) => !p.onGround && distFromFfzNm(p.lat, p.lon) < 2.5);
+      const sample = depSlice.find(
+        (p) =>
+          distFromFfzNm(p.lat, p.lon) >= 0.4 &&
+          distFromFfzNm(p.lat, p.lon) <= 1.6
+      );
+      if (sample) {
+        const brg = bearingDeg(FFZ.lat, FFZ.lon, sample.lat, sample.lon);
+        const heading =
+          sample.trackDeg ??
+          (depSlice.length > 1
+            ? bearingDeg(
+                depSlice[0].lat,
+                depSlice[0].lon,
+                sample.lat,
+                sample.lon
+              )
+            : brg);
+        const onPreferred =
+          brg >= PREFERRED_DEPARTURE_HEADING_MIN &&
+          brg <= PREFERRED_DEPARTURE_HEADING_MAX;
+        // SW / runway 22 family: heading ~200–250 or along-track negative
+        const towardSw =
+          headingDiff(heading, 220) < 45 || alongRunwaySm(sample.lat, sample.lon) < -0.2;
+        const earlyTurnout =
+          !onPreferred &&
+          isInMesaCityLimits(sample.lat, sample.lon) &&
+          distFromFfzNm(sample.lat, sample.lon) < 1.2 &&
+          sample.altFt != null &&
+          sample.altFt < patternAlt;
+
+        if ((towardSw && !onPreferred) || earlyTurnout) {
+          findings.push({
+            code: "NON_PREFERRED_DEPARTURE",
+            severity: "low",
+            summary:
+              "Non-preferred SW / early residential-side departure (calm-wind preference assumed)",
+            evidence: [
+              `Sample bearing ${brg.toFixed(0)}° / track ~${heading.toFixed(0)}° at ${distFromFfzNm(sample.lat, sample.lon).toFixed(2)} NM`,
+              `${sample.altFt?.toLocaleString() ?? "—"} ft MSL at ${formatPhoenix(sample.time)} MST`,
+              `Calm-wind preference is 4L/4R (NE). Wind, ATC, or runway in use may fully justify SW (22) or early turnout — not detectable from ADS-B.`,
+            ],
+            lat: sample.lat,
+            lon: sample.lon,
+            time: sample.time,
+            altFt: sample.altFt,
+          });
+        }
+      }
+    }
+  }
+
+  // --- Helicopter-specific ---
   if (category === "helicopter") {
     const heliLow = track.filter((p) => {
       if (p.onGround || p.altFt == null) return false;
@@ -363,7 +534,7 @@ export function analyzeFlight(
         !p.onGround &&
         p.altFt != null &&
         p.altFt < 2500 &&
-        isWestOfHeliCanal(p.lon) &&
+        isWestOfHeliCanalAdjacent(p.lat, p.lon) &&
         distFromFfzNm(p.lat, p.lon) < 3
     );
     if (west.length >= 3) {
@@ -371,10 +542,45 @@ export function analyzeFlight(
       findings.push({
         code: "HELI_WEST_OF_FIELD",
         severity: "low",
-        summary: "Helicopter track west of field (west-side corridor)",
+        summary:
+          "Helicopter west of Roosevelt Irrigation Canal adjacent to runway latitudes",
         evidence: [
           `Sample ${formatPhoenix(sample.time)} MST — ${sample.altFt?.toLocaleString()} ft MSL`,
-          `Longitude ${sample.lon.toFixed(4)} (west of ${HELI_WEST_LON})`,
+          `Lon ${sample.lon.toFixed(4)} west of canal ≈ ${HELI_WEST_LON} · lat ${sample.lat.toFixed(4)} (band ${HELI_CANAL.latMin}–${HELI_CANAL.latMax})`,
+          `Guidance: remain east of canal west of runways (heli PDF 49031)`,
+        ],
+        lat: sample.lat,
+        lon: sample.lon,
+        time: sample.time,
+        altFt: sample.altFt,
+      });
+    }
+
+    // Soft route conformance — only when maneuvering near field but not on a corridor
+    const nearFieldAir = track.filter(
+      (p) =>
+        !p.onGround &&
+        p.altFt != null &&
+        p.altFt < 2800 &&
+        distFromFfzNm(p.lat, p.lon) >= 0.6 &&
+        distFromFfzNm(p.lat, p.lon) <= 3.5
+    );
+    const softMisses = nearFieldAir.filter((p) => {
+      const m = heliRouteSoftMiss(p.lat, p.lon);
+      return m.miss;
+    });
+    if (nearFieldAir.length >= 6 && softMisses.length >= Math.ceil(nearFieldAir.length * 0.7)) {
+      const sample = softMisses[Math.floor(softMisses.length / 2)];
+      const miss = heliRouteSoftMiss(sample.lat, sample.lon);
+      findings.push({
+        code: "HELI_ROUTE_SOFT",
+        severity: "low",
+        summary:
+          "Helicopter path soft-miss vs approximate Snake/Cactus/Gecko/Yankee corridors",
+        evidence: [
+          `Nearest approx corridor: ${miss.nearest} (~${miss.distNm.toFixed(2)} NM away)`,
+          `Sample ${formatPhoenix(sample.time)} MST — ${sample.altFt?.toLocaleString()} ft MSL`,
+          `ATC may vector off published routes — soft screening cue only`,
         ],
         lat: sample.lat,
         lon: sample.lon,
@@ -389,7 +595,7 @@ export function analyzeFlight(
     icao24: flight.icao24,
     callsign,
     registration,
-    aircraftType: null,
+    aircraftType,
     category,
     firstSeen: flight.firstSeen,
     lastSeen: flight.lastSeen,

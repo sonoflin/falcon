@@ -86,9 +86,10 @@ export async function buildReport(
   end: number
 ): Promise<ReportResponse> {
   const limitations: string[] = [
-    "Procedures are voluntary; findings are screening cues, not citations.",
+    "Fly Friendly / noise procedures are voluntary. Findings are screening flags and review candidates — not citations, violations, or regulatory determinations.",
     "ADS-B coverage gaps can miss or under-sample aircraft.",
-    "Aircraft category (piston/turbine/helicopter) may be inferred when type is unknown.",
+    "Aircraft category prefers ADS-B ICAO type designator when available; otherwise inferred from kinematics/callsign.",
+    "Not detectable from ADS-B (non-goals): power/RPM/blade slap, Vy specifically, PAPI compliance, hover time, ATC clearances, or actual wind justifying runway choice.",
     `OpenSky REST airport lists are preferred; tracks prefer ADS-B.lol day traces when available.`,
     `OpenSky track lookback via REST is roughly ${OPENSKY.trackLookbackDays} days.`,
   ];
@@ -176,13 +177,14 @@ export async function buildReport(
       hint
     );
     await sleep(mode === "oauth" ? 80 : 200);
-    const result = analyzeFlight(flight, loaded.track);
     const meta = metaByIcao.get(flight.icao24);
+    const aircraftType = loaded.type || meta?.type || null;
+    const result = analyzeFlight(flight, loaded.track, { aircraftType });
     return {
       ...result,
       registration:
         result.registration || loaded.registration || meta?.registration || null,
-      aircraftType: result.aircraftType || loaded.type || meta?.type || null,
+      aircraftType: result.aircraftType || aircraftType,
       source: loaded.source === "none" ? result.source : loaded.source,
       verifyUrl: `https://globe.adsb.lol/?icao=${flight.icao24}`,
     };
@@ -264,6 +266,7 @@ export function flightsToCsv(flights: AnalyzedFlight[]): string {
     "icao24",
     "callsign",
     "registration",
+    "aircraftType",
     "category",
     "severity",
     "firstSeen_unix",
@@ -278,6 +281,7 @@ export function flightsToCsv(flights: AnalyzedFlight[]): string {
       f.icao24,
       f.callsign ?? "",
       f.registration ?? "",
+      f.aircraftType ?? "",
       f.category,
       f.maxSeverity ?? "",
       f.firstSeen,

@@ -1,6 +1,8 @@
 # FFZ Ops Review
 
-Staff tool for **Falcon Field Airport (KFFZ)** to review overnight / off-hours operations using real ADS-B-derived flight tracks. Pick a time window, see potential procedure deviations, open a flight for map + altitude evidence, and export CSV.
+Staff tool for **Falcon Field Airport (KFFZ)** to review overnight / off-hours operations using real ADS-B-derived flight tracks. Pick a time window, see **screening flags / review candidates** against voluntary Fly Friendly / noise-abatement guidance, open a flight for map + altitude evidence, and export CSV.
+
+Procedures are **voluntary**. This app does **not** determine violations or issue citations.
 
 ## Quick start
 
@@ -35,31 +37,40 @@ Each flagged flight links to a public globe view and shows timestamps, altitudes
 
 ### Limitations (important)
 
-- Noise procedures are **voluntary**; this tool surfaces **screening cues**, not citations or enforcement actions.
+- Noise procedures are **voluntary**; this tool surfaces **screening flags / review candidates**, not citations, “violators,” or enforcement actions.
 - OpenSky REST tracks are limited (~last 30 days). Historical Trino access requires a separate research/government application.
 - ADS-B coverage gaps, MLAT variance, and barometric altitude errors exist.
-- Aircraft category (piston / turbine / helicopter) is **inferred** when type is unknown.
+- Aircraft category prefers ADS-B.lol ICAO type designator when available; otherwise inferred.
 - Long windows are capped (≈72h of fetch) to respect API rate limits; prefer overnight presets.
 - Anonymous OpenSky quotas are tight and may rate-limit after heavy use — **configure OAuth credentials for reliable daily staff reports**. Without OpenSky, the app falls back to ADS-B.lol nearby aircraft + day traces (biased toward currently transmitting aircraft).
+
+### Explicit non-goals (not detectable from ADS-B)
+
+- Power / RPM / blade slap
+- Vy specifically
+- PAPI / visual glidepath
+- Hover time
+- ATC clearances or wind justifying runway / turnout
 
 ## Time presets (America/Phoenix, no DST)
 
 - **Staff off** — 6:00 p.m.–5:30 a.m. (airport staff typically not present)
-- **Quiet hours** — 10:00 p.m.–5:30 a.m.
+- **Quiet hours** — 10:00 p.m.–5:30 a.m. (Chart Supp 0500–1230Z)
 - Last 24 hours, yesterday overnight, last 7 nights (fetch capped), custom range
 
 ## Screening heuristics (internal)
 
-Encoded from Falcon Field’s published noise abatement guidance (rev 11/04/2024), expressed in operational language in the UI only:
+Encoded from Falcon Field’s published noise abatement guidance (rev 11/04/2024), Chart Supplement quiet-hours language, and helicopter guidance **PDF 49031** (not 49055 Task Force docs). See `docs/encoded-criteria.md`.
 
-- Below expected pattern altitude near the field
+- Below expected pattern altitude on **downwind/abeam** (final/base excluded)
 - Slow climb after departure (still below climb target beyond ~1.5 NM)
-- Wide pattern (downwind farther than ~1.25 SM)
-- Repetitive low circuits / approaches during 10:00 p.m.–5:30 a.m.
+- Wide pattern (lateral offset from runway centerline ≳ ~1.1 SM; Chart ~¾ mi from runway end)
+- `NIGHT_REPETITIVE` — ≥2 quiet-hour circuit/approach cycles; `QUIET_HOUR_ACTIVITY` for non-repetitive quiet-hour presence
 - Low altitude over Mesa city limits outside the preferred northeast departure corridor
-- Helicopter-specific near-field altitude and west-of-field corridor checks
+- Soft `NON_PREFERRED_DEPARTURE` for SW (22) / early residential turnout when calm-wind preference would apply (wind/ATC disclaimer)
+- Helicopter near-field altitude, canal-adjacent west-of-field, and soft published-route checks
 
-The UI does **not** name or quote voluntary program branding.
+UI copy prefers operational language and screening framing; program branding is not quoted as regulation.
 
 ## Deploy
 

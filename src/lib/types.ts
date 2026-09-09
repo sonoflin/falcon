@@ -5,9 +5,12 @@ export type ReasonCode =
   | "SLOW_DEPARTURE_CLIMB"
   | "WIDE_PATTERN"
   | "NIGHT_REPETITIVE"
+  | "QUIET_HOUR_ACTIVITY"
   | "LOW_OVER_MESA"
+  | "NON_PREFERRED_DEPARTURE"
   | "HELI_LOW_NEAR_FIELD"
-  | "HELI_WEST_OF_FIELD";
+  | "HELI_WEST_OF_FIELD"
+  | "HELI_ROUTE_SOFT";
 
 export interface TrackPoint {
   time: number; // unix seconds

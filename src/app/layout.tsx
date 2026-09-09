@@ -17,7 +17,7 @@ const display = Fraunces({
 export const metadata: Metadata = {
   title: "FFZ Ops Review",
   description:
-    "Falcon Field Airport operations review — potential procedure deviations with verifiable flight evidence.",
+    "Falcon Field Airport voluntary Fly Friendly screening — review candidates with verifiable ADS-B evidence. Not a regulatory determination.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
