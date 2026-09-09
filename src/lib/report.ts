@@ -4,7 +4,7 @@ import {
   fetchDayTrace,
   filterTrackToWindow,
 } from "./adsblol";
-import { FFZ, OPENSKY } from "./constants";
+import { FFZ } from "./constants";
 import { isKffzLocalTrack, isKiwaAirportCode } from "./geography";
 import {
   fetchAirportFlights,
@@ -89,10 +89,9 @@ export async function buildReport(
   const limitations: string[] = [
     "Fly Friendly / noise procedures are voluntary. Findings are screening flags and review candidates — not citations, violations, or regulatory determinations.",
     "ADS-B coverage gaps can miss or under-sample aircraft.",
-    "Aircraft category prefers ADS-B ICAO type designator when available; otherwise inferred from kinematics/callsign.",
+    "Aircraft category prefers ADS-B type designator when available; otherwise inferred from flight path/callsign.",
     "Not detectable from ADS-B (non-goals): power/RPM/blade slap, Vy specifically, PAPI compliance, hover time, ATC clearances, or actual wind justifying runway choice.",
-    `OpenSky REST airport lists are preferred; tracks prefer ADS-B.lol day traces when available.`,
-    `OpenSky track lookback via REST is roughly ${OPENSKY.trackLookbackDays} days.`,
+    "Track history for older operations may be limited.",
     "Airport identity: only KFFZ (Falcon Field) operations — tracks must approach KFFZ and are excluded when centered on KIWA (Mesa Gateway).",
   ];
 
@@ -100,47 +99,19 @@ export async function buildReport(
   const cappedBegin = Math.max(begin, end - maxSpan);
   if (cappedBegin !== begin) {
     limitations.push(
-      "Query window capped to the most recent 36 hours for API rate limits."
+      "Query window capped to the most recent 36 hours."
     );
   }
 
   let mode: "anonymous" | "oauth" | "oauth_unreachable" | "demo" =
     "anonymous";
-  let sourceNote =
-    "OpenSky Network (KFFZ flights) + ADS-B.lol traces when available";
+  let sourceNote = "KFFZ airport flights and ADS-B track traces";
   let rawFlights;
   let metaByIcao = new Map<
     string,
     { registration: string | null; type: string | null }
   >();
   const credsConfigured = hasOpenskyCredentials();
-  const proxyConfigured = Boolean(
-    (process.env.OPENSKY_PROXY_URL || process.env.OPENSKY_TOKEN_PROXY_URL)?.trim() &&
-      process.env.OPENSKY_PROXY_SECRET?.trim()
-  );
-  const egressConfigured = Boolean(
-    process.env.OPENSKY_EGRESS_PROXY_URL?.trim() ||
-      (process.env.OPENSKY_EGRESS_PROXY_HOST?.trim() &&
-        process.env.OPENSKY_EGRESS_PROXY_USER?.trim() &&
-        process.env.OPENSKY_EGRESS_PROXY_PASS?.trim())
-  );
-  if (!credsConfigured) {
-    limitations.push(
-      "OpenSky OAuth is not configured (no client credentials and no OPENSKY_PROXY_URL) — anonymous limits or ADS-B.lol fallback."
-    );
-  } else if (proxyConfigured) {
-    limitations.push(
-      "OpenSky OAuth is configured via secured application proxy (OPENSKY_PROXY_URL)."
-    );
-  } else if (egressConfigured) {
-    limitations.push(
-      "OpenSky OAuth uses server-side CONNECT egress for cloud hosts that cannot reach OpenSky directly."
-    );
-  } else {
-    limitations.push(
-      "OpenSky OAuth credentials are configured on this deployment."
-    );
-  }
 
   try {
     const result = await fetchAirportFlights(FFZ.icao, cappedBegin, end);
@@ -153,11 +124,10 @@ export async function buildReport(
     mode = result.mode;
     if (mode === "oauth_unreachable") {
       limitations.push(
-        "OpenSky OAuth is configured but the auth host was unreachable; used anonymous OpenSky API where possible (lower rate limits)."
+        "Flight listing is using backup track data."
       );
     }
   } catch (err) {
-    const msg = err instanceof Error ? err.message : "OpenSky unavailable";
     const authHint =
       err &&
       typeof err === "object" &&
@@ -166,19 +136,18 @@ export async function buildReport(
     if (credsConfigured || authHint) {
       mode = "oauth_unreachable";
       limitations.push(
-        `OpenSky OAuth is configured but unreachable (${msg}). Using ADS-B.lol nearby fallback — overnight KFFZ arrival/departure lists may be incomplete.`
+        "Flight listing is using backup track data — overnight KFFZ arrival/departure lists may be incomplete."
       );
     } else {
       mode = "anonymous";
       limitations.push(
-        `OpenSky airport list failed (${msg}). Using ADS-B.lol nearby fallback.`
+        "Flight listing is using backup track data."
       );
     }
     const fb = await discoverFlightsViaAdsbLol(cappedBegin, end);
     rawFlights = fb.flights;
     metaByIcao = fb.metaByIcao;
-    sourceNote =
-      "ADS-B.lol nearby aircraft + day traces (OpenSky unavailable — coverage limited to aircraft with traces; may miss landed overnight ops and can leak Gateway-area aircraft before geo filters)";
+    sourceNote = "Backup track data (coverage may be limited)";
   }
 
   if (!rawFlights.length) {
@@ -189,10 +158,9 @@ export async function buildReport(
         rawFlights = fb.flights;
         metaByIcao = fb.metaByIcao;
         limitations.push(
-          "OpenSky returned no airport flights for this window; used ADS-B.lol nearby fallback."
+          "No airport flights found for this window; using backup track data."
         );
-        sourceNote =
-          "ADS-B.lol nearby aircraft + day traces (fallback — may miss aircraft no longer transmitting)";
+        sourceNote = "Backup track data (coverage may be limited)";
       }
     } catch {
       // ignore

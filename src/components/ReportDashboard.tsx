@@ -224,12 +224,6 @@ export function ReportDashboard() {
             <summary className="cursor-pointer text-stone-600">Data notes</summary>
             <ul className="mt-2 list-disc pl-5 space-y-1">
               <li>Source: {data.meta.source}</li>
-              <li>
-                Auth:{" "}
-                {data.meta.authMode === "oauth_unreachable"
-                  ? "oauth configured but OpenSky unreachable from this host"
-                  : data.meta.authMode}
-              </li>
               <li>Generated: {data.meta.generatedAt}</li>
               {data.meta.limitations.map((l) => (
                 <li key={l}>{l}</li>
