@@ -31,10 +31,16 @@ function eastValleyBounds() {
   return new LngLatBounds([west, south], [east, north]);
 }
 
+function inMapRegion(lat: number, lon: number) {
+  const [west, south, east, north] = MAP_VIEW.maxBounds;
+  return lon >= west && lon <= east && lat >= south && lat <= north;
+}
+
 function fitToTrackOrRegion(map: Map, track: TrackPoint[]) {
-  if (track.length >= 2) {
+  const focus = track.filter((p) => inMapRegion(p.lat, p.lon));
+  if (focus.length >= 2) {
     const bounds = new LngLatBounds();
-    track.forEach((p) => bounds.extend([p.lon, p.lat]));
+    focus.forEach((p) => bounds.extend([p.lon, p.lat]));
     bounds.extend([FFZ.lon, FFZ.lat]);
     map.fitBounds(bounds, {
       padding: 48,
@@ -54,6 +60,12 @@ export function FlightMap({ track, findings = [], className }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<Map | null>(null);
 
+  const displayTrack = useMemo(() => {
+    const local = track.filter((p) => inMapRegion(p.lat, p.lon));
+    // Draw East Valley segment when present; otherwise keep empty (honest empty state).
+    return local;
+  }, [track]);
+
   const line = useMemo(
     () => ({
       type: "Feature" as const,
@@ -61,12 +73,12 @@ export function FlightMap({ track, findings = [], className }: Props) {
       geometry: {
         type: "LineString" as const,
         coordinates:
-          track.length >= 2
-            ? track.map((p) => [p.lon, p.lat] as [number, number])
+          displayTrack.length >= 2
+            ? displayTrack.map((p) => [p.lon, p.lat] as [number, number])
             : ([] as [number, number][]),
       },
     }),
-    [track]
+    [displayTrack]
   );
 
   const highlights = useMemo(
@@ -182,7 +194,7 @@ export function FlightMap({ track, findings = [], className }: Props) {
         .setPopup(new Popup().setText("KFFZ Falcon Field"))
         .addTo(map);
 
-      fitToTrackOrRegion(map, track);
+      fitToTrackOrRegion(map, displayTrack);
     });
 
     mapRef.current = map;
@@ -200,8 +212,8 @@ export function FlightMap({ track, findings = [], className }: Props) {
     const findSrc = map.getSource("findings") as GeoJSONSource | undefined;
     trackSrc?.setData(line);
     findSrc?.setData(highlights);
-    fitToTrackOrRegion(map, track);
-  }, [line, highlights, track]);
+    fitToTrackOrRegion(map, displayTrack);
+  }, [line, highlights, displayTrack]);
 
   return (
     <div className={`relative ${className ?? "h-full w-full min-h-[280px]"}`}>
@@ -211,10 +223,11 @@ export function FlightMap({ track, findings = [], className }: Props) {
         role="img"
         aria-label="Flight track map"
       />
-      {track.length < 2 && (
+      {displayTrack.length < 2 && (
         <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-stone-950/70 px-3 py-2 text-xs text-amber-50">
-          No track points for this operation — map focused on Falcon Field /
-          East Valley.
+          {track.length >= 2
+            ? "Track exists but is outside the East Valley map focus — no local path to draw."
+            : "No track points for this operation — map focused on Falcon Field / East Valley."}
         </div>
       )}
     </div>

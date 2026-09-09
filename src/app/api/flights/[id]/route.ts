@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { analyzeFlight } from "@/lib/analysis";
 import { fetchDayTrace, filterTrackToWindow } from "@/lib/adsblol";
+import { RADII_NM } from "@/lib/constants";
+import { distFromFfzNm } from "@/lib/geography";
 import { fetchTrack } from "@/lib/opensky";
 import { nowUnix } from "@/lib/time";
 
@@ -24,10 +26,14 @@ export async function GET(req: NextRequest, { params }: Params) {
 
     const callsign = req.nextUrl.searchParams.get("callsign");
     const end = nowUnix();
-    const begin = Math.max(firstSeen - 3600, end - 36 * 3600);
+    // Keep the ops window around the observed FFZ activity, not the whole day cruise.
+    const begin = Math.max(firstSeen - 45 * 60, end - 36 * 3600);
+    const trackEnd = Math.min(end + 600, firstSeen + 3 * 3600);
 
     const day = await fetchDayTrace(icao24);
-    let track = filterTrackToWindow(day.track, begin, end + 3600);
+    let track = filterTrackToWindow(day.track, begin, trackEnd).filter(
+      (p) => distFromFfzNm(p.lat, p.lon) <= RADII_NM.mesaFocusNm
+    );
     let source = "ADS-B.lol day trace";
     const registration = day.registration;
     const aircraftType = day.aircraftType;
@@ -37,7 +43,13 @@ export async function GET(req: NextRequest, { params }: Params) {
       const time = timeParam ? Number(timeParam) : firstSeen + 60;
       try {
         const openskyTrack = await fetchTrack(icao24, time);
-        if (openskyTrack.length) {
+        const local = openskyTrack.filter(
+          (p) => distFromFfzNm(p.lat, p.lon) <= RADII_NM.mesaFocusNm
+        );
+        if (local.length >= 3) {
+          track = local;
+          source = "OpenSky Network track";
+        } else if (openskyTrack.length >= 3) {
           track = openskyTrack;
           source = "OpenSky Network track";
         }
