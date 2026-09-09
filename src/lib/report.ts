@@ -13,8 +13,8 @@ import {
 } from "./opensky";
 import type { AnalyzedFlight, ReportResponse, TrackPoint } from "./types";
 
-const MAX_TRACKS_ANON = 18;
-const MAX_TRACKS_AUTH = 40;
+const MAX_TRACKS_ANON = 24;
+const MAX_TRACKS_AUTH = 48;
 const TRACK_CONCURRENCY_ANON = 2;
 const TRACK_CONCURRENCY_AUTH = 3;
 
@@ -122,6 +122,11 @@ export async function buildReport(
         !isKiwaAirportCode(f.estArrivalAirport)
     );
     mode = result.mode;
+    if (result.arrivalsIncomplete) {
+      limitations.push(
+        "OpenSky arrivals were incomplete for this window after retry — departure list may dominate; refresh once if results look thin."
+      );
+    }
     if (mode === "oauth_unreachable") {
       limitations.push(
         "Flight listing is using backup track data."
@@ -171,11 +176,17 @@ export async function buildReport(
   const concurrency =
     mode === "oauth" ? TRACK_CONCURRENCY_AUTH : TRACK_CONCURRENCY_ANON;
 
-  const sorted = [...rawFlights].sort((a, b) => b.lastSeen - a.lastSeen);
+  // Stable tie-breakers so the same candidate set truncates identically across runs.
+  const sorted = [...rawFlights].sort(
+    (a, b) =>
+      b.lastSeen - a.lastSeen ||
+      a.icao24.localeCompare(b.icao24) ||
+      a.firstSeen - b.firstSeen
+  );
   const limited = sorted.slice(0, maxTracks);
   if (sorted.length > maxTracks) {
     limitations.push(
-      `Analyzed ${maxTracks} of ${sorted.length} candidate flights (newest first).`
+      `Analyzed ${maxTracks} of ${sorted.length} candidate flights (newest first; raise OpenSky OAuth coverage for a larger sample).`
     );
   }
 

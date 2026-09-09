@@ -188,42 +188,119 @@ function overnightChipHint(begin: number, end: number): string {
   return `${left} – ${right}`;
 }
 
+/**
+ * Parse `<input type="datetime-local">` as America/Phoenix wall clock.
+ * Browser local TZ must not shift the intended Mesa/FFZ review window.
+ */
+export function parsePhoenixDateTimeLocal(value: string): number {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(
+    value.trim()
+  );
+  if (!m) {
+    throw new Error(`Invalid Phoenix datetime: ${value}`);
+  }
+  return phoenixLocalToUnix(
+    Number(m[1]),
+    Number(m[2]) - 1,
+    Number(m[3]),
+    Number(m[4]),
+    Number(m[5]),
+    m[6] ? Number(m[6]) : 0
+  );
+}
+
+function labelForPinnedWindow(
+  preset: PresetId,
+  begin: number,
+  end: number,
+  partial: boolean
+): string {
+  switch (preset) {
+    case "last24h":
+      return "Last 24 hours";
+    case "last7nights":
+      return "Last 7 nights";
+    case "yesterday_overnight":
+      return "Yesterday overnight";
+    case "staff_off":
+      return overnightTitle("staff", begin, end, partial);
+    case "quiet_last_night":
+      return overnightTitle("quiet", begin, end, partial);
+    case "custom":
+    default:
+      return "Custom range";
+  }
+}
+
+/**
+ * When both begin/end are provided, honor them (pinned client/API window).
+ * Otherwise compute from "now" for the preset.
+ */
 export function resolvePreset(
   preset: PresetId,
   customBegin?: number,
   customEnd?: number
 ): TimeWindow {
   const end = nowUnix();
+
+  // Explicit windows win — same query + timeframe must not drift with server "now".
+  if (
+    customBegin != null &&
+    customEnd != null &&
+    Number.isFinite(customBegin) &&
+    Number.isFinite(customEnd) &&
+    customEnd > customBegin
+  ) {
+    const partial =
+      preset === "last24h" ||
+      preset === "last7nights" ||
+      (preset !== "custom" &&
+        preset !== "yesterday_overnight" &&
+        customEnd >= end - 180);
+    return {
+      begin: customBegin,
+      end: customEnd,
+      label: labelForPinnedWindow(preset, customBegin, customEnd, partial),
+      rangeLabel: formatPhoenixRange(customBegin, customEnd),
+      preset: preset === "custom" ? "custom" : preset,
+      partial,
+    };
+  }
+
   switch (preset) {
     case "last24h": {
-      const begin = end - 24 * 3600;
+      // Bucket end to the minute so rapid refreshes share one window/cache key.
+      const bucketedEnd = Math.floor(end / 60) * 60;
+      const begin = bucketedEnd - 24 * 3600;
       return {
         begin,
-        end,
+        end: bucketedEnd,
         label: "Last 24 hours",
-        rangeLabel: formatPhoenixRange(begin, end),
+        rangeLabel: formatPhoenixRange(begin, bucketedEnd),
         preset,
         partial: true,
       };
     }
     case "staff_off": {
       const w = mostRecentOvernightWindow("staff");
+      const bucketedEnd = w.partial ? Math.floor(w.end / 60) * 60 : w.end;
       return {
         begin: w.begin,
-        end: w.end,
-        label: overnightTitle("staff", w.begin, w.end, w.partial),
-        rangeLabel: formatPhoenixRange(w.begin, w.end),
+        end: bucketedEnd,
+        label: overnightTitle("staff", w.begin, bucketedEnd, w.partial),
+        rangeLabel: formatPhoenixRange(w.begin, bucketedEnd),
         preset,
         partial: w.partial,
       };
     }
     case "quiet_last_night": {
       const w = mostRecentOvernightWindow("quiet");
+      const bucketedEnd = w.partial ? Math.floor(w.end / 60) * 60 : w.end;
       return {
         begin: w.begin,
-        end: w.end,
-        label: overnightTitle("quiet", w.begin, w.end, w.partial),
-        rangeLabel: formatPhoenixRange(w.begin, w.end),
+        end: bucketedEnd,
+        label: overnightTitle("quiet", w.begin, bucketedEnd, w.partial),
+        rangeLabel: formatPhoenixRange(w.begin, bucketedEnd),
         preset,
         partial: w.partial,
       };
@@ -260,6 +337,7 @@ export function resolvePreset(
     }
     case "last7nights": {
       const z = toZonedTime(new Date(), TZ);
+      const bucketedEnd = Math.floor(end / 60) * 60;
       const beginDate = new Date(
         z.getFullYear(),
         z.getMonth(),
@@ -272,9 +350,9 @@ export function resolvePreset(
       const begin = Math.floor(fromZonedTime(beginDate, TZ).getTime() / 1000);
       return {
         begin,
-        end,
+        end: bucketedEnd,
         label: "Last 7 nights",
-        rangeLabel: formatPhoenixRange(begin, end),
+        rangeLabel: formatPhoenixRange(begin, bucketedEnd),
         preset,
         partial: true,
       };

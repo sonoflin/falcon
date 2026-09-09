@@ -317,11 +317,73 @@ async function fetchFlightsEndpoint(
   return flights;
 }
 
+/** Same aircraft dep+arr (or chunk overlap) within this gap merge into one candidate. */
+const FLIGHT_MERGE_GAP_SEC = 45 * 60;
+
+/**
+ * Merge OpenSky dep/arr rows for the same icao24 when intervals overlap or nearly touch.
+ * Exact firstSeen keys previously double-counted ops and burned track-cap slots.
+ */
+export function mergeAirportFlightRows(flights: OpenSkyFlight[]): OpenSkyFlight[] {
+  const byIcao = new Map<string, OpenSkyFlight[]>();
+  for (const f of flights) {
+    const hex = f.icao24.toLowerCase();
+    const list = byIcao.get(hex);
+    if (list) list.push(f);
+    else byIcao.set(hex, [f]);
+  }
+
+  const merged: OpenSkyFlight[] = [];
+  for (const group of byIcao.values()) {
+    group.sort((a, b) => a.firstSeen - b.firstSeen || a.lastSeen - b.lastSeen);
+    let cur: OpenSkyFlight | null = null;
+    for (const f of group) {
+      if (!cur) {
+        cur = { ...f, icao24: f.icao24.toLowerCase() };
+        continue;
+      }
+      if (f.firstSeen <= cur.lastSeen + FLIGHT_MERGE_GAP_SEC) {
+        cur = {
+          ...cur,
+          firstSeen: Math.min(cur.firstSeen, f.firstSeen),
+          lastSeen: Math.max(cur.lastSeen, f.lastSeen),
+          callsign: cur.callsign || f.callsign,
+          estDepartureAirport: cur.estDepartureAirport || f.estDepartureAirport,
+          estArrivalAirport: cur.estArrivalAirport || f.estArrivalAirport,
+          estDepartureAirportHorizDistance:
+            cur.estDepartureAirportHorizDistance ??
+            f.estDepartureAirportHorizDistance,
+          estArrivalAirportHorizDistance:
+            cur.estArrivalAirportHorizDistance ??
+            f.estArrivalAirportHorizDistance,
+        };
+      } else {
+        merged.push(cur);
+        cur = { ...f, icao24: f.icao24.toLowerCase() };
+      }
+    }
+    if (cur) merged.push(cur);
+  }
+
+  // Stable order for downstream caps: newest lastSeen, then icao24, then firstSeen.
+  merged.sort(
+    (a, b) =>
+      b.lastSeen - a.lastSeen ||
+      a.icao24.localeCompare(b.icao24) ||
+      a.firstSeen - b.firstSeen
+  );
+  return merged;
+}
+
 export async function fetchAirportFlights(
   airport: string,
   begin: number,
   end: number
-): Promise<{ flights: OpenSkyFlight[]; mode: AuthMode }> {
+): Promise<{
+  flights: OpenSkyFlight[];
+  mode: AuthMode;
+  arrivalsIncomplete?: boolean;
+}> {
   let token: string | null = null;
   let mode: AuthMode = "anonymous";
   let oauthError: Error | null = null;
@@ -351,21 +413,41 @@ export async function fetchAirportFlights(
       paceMs
     );
     await sleep(paceMs);
-    const arrs = await fetchFlightsEndpoint(
-      "arrival",
-      airport,
-      begin,
-      end,
-      token,
-      paceMs
-    ).catch(() => [] as OpenSkyFlight[]);
 
-    const byKey = new Map<string, OpenSkyFlight>();
-    for (const f of [...deps, ...arrs]) {
-      const key = `${f.icao24}:${f.firstSeen}`;
-      if (!byKey.has(key)) byKey.set(key, f);
+    let arrs: OpenSkyFlight[] = [];
+    let arrivalsIncomplete = false;
+    try {
+      arrs = await fetchFlightsEndpoint(
+        "arrival",
+        airport,
+        begin,
+        end,
+        token,
+        paceMs
+      );
+    } catch {
+      // One retry after a pause — soft-empty arrivals previously caused dep-only flips.
+      await sleep(paceMs * 2);
+      try {
+        arrs = await fetchFlightsEndpoint(
+          "arrival",
+          airport,
+          begin,
+          end,
+          token,
+          paceMs
+        );
+      } catch {
+        arrivalsIncomplete = true;
+        arrs = [];
+      }
     }
-    return { flights: [...byKey.values()], mode };
+
+    return {
+      flights: mergeAirportFlightRows([...deps, ...arrs]),
+      mode,
+      arrivalsIncomplete,
+    };
   } catch (apiErr) {
     if (oauthError) {
       throw Object.assign(oauthError, {

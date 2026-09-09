@@ -25,10 +25,27 @@ export async function GET(req: NextRequest, { params }: Params) {
     }
 
     const callsign = req.nextUrl.searchParams.get("callsign");
-    const end = nowUnix();
-    // Keep the ops window around the observed FFZ activity, not the whole day cruise.
-    const begin = Math.max(firstSeen - 45 * 60, end - 36 * 3600);
-    const trackEnd = Math.min(end + 600, firstSeen + 3 * 3600);
+    const beginParam = req.nextUrl.searchParams.get("begin");
+    const endParam = req.nextUrl.searchParams.get("end");
+    const reportBegin = beginParam ? Number(beginParam) : NaN;
+    const reportEnd = endParam ? Number(endParam) : NaN;
+    const now = nowUnix();
+
+    // Prefer the report window (±padding) so list and detail screen the same points.
+    // Fall back to a firstSeen-centered ops window when opened without report context.
+    let begin: number;
+    let trackEnd: number;
+    if (
+      Number.isFinite(reportBegin) &&
+      Number.isFinite(reportEnd) &&
+      reportEnd > reportBegin
+    ) {
+      begin = reportBegin - 300;
+      trackEnd = Math.min(reportEnd + 300, now + 600);
+    } else {
+      begin = Math.max(firstSeen - 45 * 60, now - 36 * 3600);
+      trackEnd = Math.min(now + 600, firstSeen + 3 * 3600);
+    }
 
     const day = await fetchDayTrace(icao24);
     let track = filterTrackToWindow(day.track, begin, trackEnd).filter(

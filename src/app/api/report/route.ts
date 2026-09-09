@@ -7,6 +7,8 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 const reportCache = new Map<string, { expires: number; body: unknown }>();
+/** In-flight builds keyed by cache key — avoids duplicate concurrent pulls. */
+const inflight = new Map<string, Promise<unknown>>();
 
 export async function GET(req: NextRequest) {
   try {
@@ -29,14 +31,26 @@ export async function GET(req: NextRequest) {
     }
 
     const cacheKey = `${preset}:${window.begin}:${window.end}`;
+    const skipCache = sp.get("nocache") === "1";
     const cached = reportCache.get(cacheKey);
-    if (cached && cached.expires > Date.now() && sp.get("nocache") !== "1") {
+    if (!skipCache && cached && cached.expires > Date.now()) {
       return NextResponse.json(cached.body);
     }
 
-    const report = await buildReport(window.begin, window.end);
-    const body = { ...report, window: { ...window } };
-    reportCache.set(cacheKey, { expires: Date.now() + 120_000, body });
+    let pending = inflight.get(cacheKey);
+    if (!pending) {
+      pending = (async () => {
+        const report = await buildReport(window.begin, window.end);
+        const body = { ...report, window: { ...window } };
+        reportCache.set(cacheKey, { expires: Date.now() + 120_000, body });
+        return body;
+      })().finally(() => {
+        inflight.delete(cacheKey);
+      });
+      inflight.set(cacheKey, pending);
+    }
+
+    const body = await pending;
     return NextResponse.json(body);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Report failed";

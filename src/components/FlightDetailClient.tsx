@@ -17,9 +17,13 @@ function patternFor(cat: AnalyzedFlight["category"]) {
 export function FlightDetailClient({
   id,
   callsign,
+  begin,
+  end,
 }: {
   id: string;
   callsign?: string;
+  begin?: string;
+  end?: string;
 }) {
   const [flight, setFlight] = useState<AnalyzedFlight | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -33,6 +37,8 @@ export function FlightDetailClient({
       try {
         const params = new URLSearchParams();
         if (callsign) params.set("callsign", callsign);
+        if (begin) params.set("begin", begin);
+        if (end) params.set("end", end);
         const res = await fetch(
           `/api/flights/${encodeURIComponent(id)}?${params.toString()}`,
           { cache: "no-store" }
@@ -53,7 +59,7 @@ export function FlightDetailClient({
     return () => {
       cancelled = true;
     };
-  }, [id, callsign]);
+  }, [id, callsign, begin, end]);
 
   if (loading) {
     return (

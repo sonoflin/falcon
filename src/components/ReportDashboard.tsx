@@ -2,8 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FlightList } from "@/components/FlightList";
+import { FlightMap } from "@/components/FlightMap";
 import { TimePresets } from "@/components/TimePresets";
-import type { PresetId } from "@/lib/time";
+import {
+  parsePhoenixDateTimeLocal,
+  resolvePreset,
+  type PresetId,
+} from "@/lib/time";
 import type { AnalyzedFlight, ReportMeta, Severity } from "@/lib/types";
 
 type ReportPayload = {
@@ -28,50 +33,138 @@ export function ReportDashboard() {
   const [data, setData] = useState<ReportPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const params = new URLSearchParams({ preset });
-      if (preset === "custom") {
-        if (!customBegin || !customEnd) {
-          throw new Error("Select both start and end for a custom range.");
+  const loadFor = useCallback(
+    async (nextPreset: PresetId) => {
+      setLoading(true);
+      setError(null);
+      try {
+        let begin: number;
+        let end: number;
+
+        if (nextPreset === "custom") {
+          if (!customBegin || !customEnd) {
+            throw new Error("Select both start and end for a custom range.");
+          }
+          begin = parsePhoenixDateTimeLocal(customBegin);
+          end = parsePhoenixDateTimeLocal(customEnd);
+        } else {
+          // Resolve once on the client and pin begin/end on the request so the
+          // server does not drift with a later "now".
+          const w = resolvePreset(nextPreset);
+          begin = w.begin;
+          end = w.end;
         }
-        const begin = Math.floor(new Date(customBegin).getTime() / 1000);
-        const end = Math.floor(new Date(customEnd).getTime() / 1000);
-        params.set("begin", String(begin));
-        params.set("end", String(end));
+
+        const params = new URLSearchParams({
+          preset: nextPreset,
+          begin: String(begin),
+          end: String(end),
+        });
+        const res = await fetch(`/api/report?${params.toString()}`, {
+          cache: "no-store",
+        });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || "Failed to load report");
+        setData(json);
+        const firstId = (json.flights as AnalyzedFlight[])[0]?.id ?? null;
+        setSelectedId((prev) => {
+          if (
+            prev &&
+            (json.flights as AnalyzedFlight[]).some((f) => f.id === prev)
+          ) {
+            return prev;
+          }
+          return firstId;
+        });
+      } catch (e) {
+        setData(null);
+        setSelectedId(null);
+        setError(e instanceof Error ? e.message : "Failed to load report");
+      } finally {
+        setLoading(false);
       }
-      const res = await fetch(`/api/report?${params.toString()}`, {
-        cache: "no-store",
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Failed to load report");
-      setData(json);
-    } catch (e) {
+    },
+    [customBegin, customEnd]
+  );
+
+  const load = useCallback(() => loadFor(preset), [loadFor, preset]);
+
+  const onPresetChange = (id: PresetId) => {
+    setPreset(id);
+    if (id !== "custom") {
+      void loadFor(id);
+    } else {
       setData(null);
-      setError(e instanceof Error ? e.message : "Failed to load report");
-    } finally {
-      setLoading(false);
+      setSelectedId(null);
+      setError(null);
     }
-  }, [preset, customBegin, customEnd]);
+  };
 
+  // Mount-only fetch for the default preset (chip changes call onPresetChange).
   useEffect(() => {
-    if (preset !== "custom") {
-      void load();
-    }
-  }, [preset, load]);
-
+    const t = window.setTimeout(() => {
+      void loadFor("staff_off");
+    }, 0);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional mount-only
+  }, []);
   const exportHref = useMemo(() => {
     const params = new URLSearchParams({ preset, format: "csv" });
-    if (preset === "custom" && customBegin && customEnd) {
-      params.set("begin", String(Math.floor(new Date(customBegin).getTime() / 1000)));
-      params.set("end", String(Math.floor(new Date(customEnd).getTime() / 1000)));
+    if (data?.window.begin != null && data?.window.end != null) {
+      params.set("begin", String(data.window.begin));
+      params.set("end", String(data.window.end));
+    } else if (preset === "custom" && customBegin && customEnd) {
+      try {
+        params.set("begin", String(parsePhoenixDateTimeLocal(customBegin)));
+        params.set("end", String(parsePhoenixDateTimeLocal(customEnd)));
+      } catch {
+        // leave unresolved; export will fall back to server resolve
+      }
     }
     return `/api/export?${params.toString()}`;
-  }, [preset, customBegin, customEnd]);
+  }, [preset, customBegin, customEnd, data]);
 
+  const filteredFlights = useMemo(() => {
+    if (!data) return [];
+    const q = query.trim().toLowerCase();
+    return data.flights.filter((f) => {
+      if (severity !== "all" && f.maxSeverity !== severity) return false;
+      if (!q) return true;
+      return (
+        f.callsign?.toLowerCase().includes(q) ||
+        f.icao24.includes(q) ||
+        f.registration?.toLowerCase().includes(q) ||
+        f.findings.some(
+          (x) =>
+            x.summary.toLowerCase().includes(q) ||
+            x.code.toLowerCase().includes(q)
+        )
+      );
+    });
+  }, [data, query, severity]);
+
+  const selectedFlight = useMemo(() => {
+    if (!filteredFlights.length) return null;
+    return (
+      filteredFlights.find((f) => f.id === selectedId) ?? filteredFlights[0]
+    );
+  }, [filteredFlights, selectedId]);
+
+  const overviewFindings = useMemo(
+    () => filteredFlights.flatMap((f) => f.findings),
+    [filteredFlights]
+  );
+
+  const contextTracks = useMemo(() => {
+    if (!selectedFlight) {
+      return filteredFlights.map((f) => f.track);
+    }
+    return filteredFlights
+      .filter((f) => f.id !== selectedFlight.id)
+      .map((f) => f.track);
+  }, [filteredFlights, selectedFlight]);
   return (
     <div className="flex flex-col gap-8">
       <aside
@@ -94,11 +187,11 @@ export function ReportDashboard() {
       </aside>
 
       <section className="space-y-4">
-        <TimePresets value={preset} onChange={setPreset} />
+        <TimePresets value={preset} onChange={onPresetChange} />
         {preset === "custom" && (
           <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-end">
             <label className="flex flex-col gap-1 text-sm text-stone-600 flex-1">
-              Start (local browser)
+              Start (America/Phoenix)
               <input
                 type="datetime-local"
                 value={customBegin}
@@ -107,7 +200,7 @@ export function ReportDashboard() {
               />
             </label>
             <label className="flex flex-col gap-1 text-sm text-stone-600 flex-1">
-              End
+              End (America/Phoenix)
               <input
                 type="datetime-local"
                 value={customEnd}
@@ -218,12 +311,55 @@ export function ReportDashboard() {
             </select>
           </section>
 
-          <FlightList flights={data.flights} query={query} severity={severity} />
+          {filteredFlights.length > 0 && (
+            <section className="space-y-2 print:break-inside-avoid">
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <h2 className="text-sm uppercase tracking-wider text-stone-500">
+                  Spatial overview
+                </h2>
+                {selectedFlight && (
+                  <p className="text-xs text-stone-500">
+                    Highlighted:{" "}
+                    <span className="font-medium text-stone-800">
+                      {selectedFlight.callsign ||
+                        selectedFlight.registration ||
+                        selectedFlight.icao24.toUpperCase()}
+                    </span>
+                    <span className="text-stone-400">
+                      {" "}
+                      · muted paths = other flags in this list
+                    </span>
+                  </p>
+                )}
+              </div>
+              <div className="min-h-[280px] h-[360px] sm:h-[420px] border border-stone-200/80 shadow-sm bg-stone-100">
+                <FlightMap
+                  track={selectedFlight?.track ?? []}
+                  findings={overviewFindings}
+                  contextTracks={contextTracks}
+                  className="h-full w-full"
+                />
+              </div>
+            </section>
+          )}
+
+          <FlightList
+            flights={data.flights}
+            query={query}
+            severity={severity}
+            selectedId={selectedFlight?.id ?? null}
+            onSelect={(f) => setSelectedId(f.id)}
+            windowBegin={data.window.begin}
+            windowEnd={data.window.end}
+          />
 
           <details className="text-xs text-stone-500 print:block">
             <summary className="cursor-pointer text-stone-600">Data notes</summary>
             <ul className="mt-2 list-disc pl-5 space-y-1">
               <li>Source: {data.meta.source}</li>
+              <li>
+                Window: {data.meta.begin}–{data.meta.end} ({data.meta.timezone})
+              </li>
               <li>Generated: {data.meta.generatedAt}</li>
               {data.meta.limitations.map((l) => (
                 <li key={l}>{l}</li>
