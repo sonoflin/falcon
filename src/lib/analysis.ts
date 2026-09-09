@@ -126,7 +126,8 @@ function countQuietHourCircuits(track: TrackPoint[]): {
     const a = near[i - 2].altFt!;
     const b = near[i].altFt!;
     const c = near[i + 2].altFt!;
-    if (b <= a && b <= c && b < DEPARTURE_CLIMB_TARGET_MSL + 200) {
+    // Require a real dip (not flat cruise) so quiet-hour transit ≠ circuit count
+    if (b <= a - 80 && b <= c - 80 && b < DEPARTURE_CLIMB_TARGET_MSL + 200) {
       if (near[i].time - lastValleyTime > 90) {
         samples.push(near[i]);
         lastValleyTime = near[i].time;
