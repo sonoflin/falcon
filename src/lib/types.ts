@@ -72,7 +72,7 @@ export interface ReportMeta {
   flightCount: number;
   flaggedCount: number;
   limitations: string[];
-  authMode: "anonymous" | "oauth" | "demo";
+  authMode: "anonymous" | "oauth" | "oauth_unreachable" | "demo";
   coverageSample?: Array<{
     id: string;
     callsign: string | null;

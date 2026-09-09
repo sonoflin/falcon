@@ -18,8 +18,12 @@ Open [http://localhost:3000](http://localhost:3000).
 
 | Variable | Required | Description |
 | --- | --- | --- |
-| `OPENSKY_CLIENT_ID` | No | OpenSky OAuth2 client id (higher rate limits) |
-| `OPENSKY_CLIENT_SECRET` | No | OpenSky OAuth2 client secret |
+| `OPENSKY_CLIENT_ID` | No* | OpenSky OAuth2 client id (higher rate limits) |
+| `OPENSKY_CLIENT_SECRET` | No* | OpenSky OAuth2 client secret |
+| `OPENSKY_PROXY_URL` | No* | Cloudflare Worker base URL that can reach OpenSky auth/API |
+| `OPENSKY_PROXY_SECRET` | No* | Shared secret for the egress proxy |
+
+\*Prefer client credentials locally. On Vercel, if `auth.opensky-network.org` is blocked, deploy `workers/opensky-proxy` and set `OPENSKY_PROXY_URL` + `OPENSKY_PROXY_SECRET` (Worker holds the OpenSky client secrets).
 
 Create an API client at [OpenSky Network](https://opensky-network.org/) → Account → API clients (client credentials flow). Without credentials the app uses anonymous REST access (more rate limiting).
 
@@ -56,9 +60,11 @@ Each flagged flight links to a public globe view and shows timestamps, altitudes
 
 ## Time presets (America/Phoenix, no DST)
 
-- **Staff off** — 6:00 p.m.–5:30 a.m. (airport staff typically not present)
-- **Quiet hours** — 10:00 p.m.–5:30 a.m. (Chart Supp 0500–1230Z)
-- Last 24 hours, yesterday overnight, last 7 nights (fetch capped), custom range
+Presets resolve concrete AZ date bounds (shown on chips and in the results header). Before tonight’s window starts, overnight presets mean the **completed prior night** — never an empty future “tonight.”
+
+- **Staff off** — most recent 6:00 p.m.–5:30 a.m. (or tonight-so-far after 6:00 p.m.)
+- **Quiet hours** — most recent 10:00 p.m.–5:30 a.m. (Chart Supp 0500–1230Z); after 10:00 p.m. = tonight so far
+- Last 24 hours, yesterday overnight, last 7 nights (fetch capped to 36h), custom range
 
 ## Screening heuristics (internal)
 
@@ -98,8 +104,37 @@ GitHub Actions secrets **are** useful later if you add a workflow that deploys (
 3. **Project → Settings → Environment Variables** (Production + Preview):
    - `OPENSKY_CLIENT_ID` = your OpenSky API client id
    - `OPENSKY_CLIENT_SECRET` = your OpenSky API client secret  
-   No other env vars are required. (`DEMO_MODE` in `.env.example` is unused.)
-4. Redeploy after saving env vars so the new secrets apply.
+   - If Vercel cannot reach `auth.opensky-network.org` (connect timeout), also set:
+     - `OPENSKY_PROXY_URL` = egress proxy base URL (see below)
+     - `OPENSKY_PROXY_SECRET` = shared secret for that proxy
+4. Redeploy after changing env vars (Vercel does not always hot-reload secrets into existing lambdas).
+
+### OpenSky egress proxy (Vercel / Cloudflare datacenter blocks)
+
+OpenSky’s auth host (and often the REST API) are reachable from residential networks but return connect timeouts / 522 from **Vercel** and **Cloudflare Workers**. Credentials on Vercel alone are not enough.
+
+**Working demo path (tonight):** run a local proxy on a machine that can reach OpenSky, expose it with Cloudflare Tunnel, point Vercel at it:
+
+```bash
+# Terminal A — mint tokens + proxy API (uses Downloads/credentials.json or env)
+export CREDENTIALS_JSON="$HOME/Downloads/credentials.json"
+export PROXY_SECRET="choose-a-long-random-secret"
+export PORT=8791
+npm run opensky:proxy
+
+# Terminal B — public URL for Vercel
+cloudflared tunnel --url http://127.0.0.1:8791
+# → https://….trycloudflare.com  (ephemeral; keep both processes running for the demo)
+```
+
+Set `OPENSKY_PROXY_URL` to that tunnel URL and `OPENSKY_PROXY_SECRET` to the same secret on Vercel Production, then redeploy.
+
+Repo also includes `workers/opensky-proxy` (same protocol). Deploy with `npm run opensky:proxy:worker` if OpenSky ever allows Cloudflare egress; today the Worker probe gets **522** to both auth and API.
+
+Without a working proxy, Falcon falls back to ADS-B.lol nearby discovery (`authMode: oauth_unreachable` when OAuth is configured but blocked).
+
+No other env vars are required. (`DEMO_MODE` in `.env.example` is unused.)
+
 5. Open the `*.vercel.app` URL and run **Staff off** or **Quiet hours** (short overnight windows). Avoid “last 7 nights” for a live walkthrough — longer windows hit rate limits and approach the 60s serverless timeout.
 
 Report/export routes set `maxDuration = 60`. On Vercel Hobby the effective limit may be lower; if reports time out, use a Pro plan or a shorter preset.

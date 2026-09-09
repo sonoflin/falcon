@@ -2,7 +2,7 @@ import { OPENSKY } from "./constants";
 import { metersToFeet } from "./geography";
 import type { OpenSkyFlight, TrackPoint } from "./types";
 
-export type AuthMode = "anonymous" | "oauth";
+export type AuthMode = "anonymous" | "oauth" | "oauth_unreachable";
 
 let cachedToken: { value: string; expiresAt: number } | null = null;
 
@@ -34,8 +34,22 @@ export function getCredentials() {
   return null;
 }
 
+function getProxyConfig(): { base: string; secret: string } | null {
+  const base = (
+    process.env.OPENSKY_PROXY_URL ||
+    process.env.OPENSKY_TOKEN_PROXY_URL ||
+    ""
+  )
+    .trim()
+    .replace(/\/+$/, "");
+  const secret = process.env.OPENSKY_PROXY_SECRET?.trim();
+  if (base && secret) return { base, secret };
+  return null;
+}
+
+/** True when OAuth is configured directly or via egress proxy. */
 export function hasOpenskyCredentials(): boolean {
-  return getCredentials() != null;
+  return getCredentials() != null || getProxyConfig() != null;
 }
 
 function formatFetchFailure(context: string, err: unknown): Error {
@@ -47,7 +61,7 @@ function formatFetchFailure(context: string, err: unknown): Error {
         ? base.cause
         : "";
   const detail = [base.message, cause].filter(Boolean).join(" — ");
-  if (/fetch failed|network|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|cert/i.test(detail)) {
+  if (/fetch failed|network|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|cert|timeout/i.test(detail)) {
     return new Error(
       `${context} network failure (${detail}). OpenSky may be unreachable from this host.`
     );
@@ -67,17 +81,40 @@ async function safeFetch(
   }
 }
 
-export async function getAccessToken(): Promise<{
-  token: string | null;
-  mode: AuthMode;
-}> {
-  const creds = getCredentials();
-  if (!creds) return { token: null, mode: "anonymous" };
-
-  if (cachedToken && Date.now() < cachedToken.expiresAt - 60_000) {
-    return { token: cachedToken.value, mode: "oauth" };
+async function fetchTokenViaProxy(
+  proxy: { base: string; secret: string }
+): Promise<{ token: string; expiresIn: number }> {
+  const res = await safeFetch(
+    `${proxy.base}/token`,
+    {
+      method: "POST",
+      headers: {
+        "X-Proxy-Secret": proxy.secret,
+        Accept: "application/json",
+      },
+      cache: "no-store",
+    },
+    "OpenSky OAuth token (proxy)"
+  );
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(
+      `OpenSky token proxy error ${res.status}: ${text.slice(0, 220)}`
+    );
   }
+  const json = (await res.json()) as {
+    access_token: string;
+    expires_in: number;
+  };
+  if (!json.access_token) {
+    throw new Error("OpenSky token proxy returned no access_token");
+  }
+  return { token: json.access_token, expiresIn: json.expires_in || 1800 };
+}
 
+async function fetchTokenDirect(
+  creds: { clientId: string; clientSecret: string }
+): Promise<{ token: string; expiresIn: number }> {
   const body = new URLSearchParams({
     grant_type: "client_credentials",
     client_id: creds.clientId,
@@ -109,11 +146,44 @@ export async function getAccessToken(): Promise<{
     access_token: string;
     expires_in: number;
   };
-  cachedToken = {
-    value: json.access_token,
-    expiresAt: Date.now() + (json.expires_in || 1800) * 1000,
-  };
-  return { token: cachedToken.value, mode: "oauth" };
+  return { token: json.access_token, expiresIn: json.expires_in || 1800 };
+}
+
+export async function getAccessToken(): Promise<{
+  token: string | null;
+  mode: AuthMode;
+}> {
+  const proxy = getProxyConfig();
+  const creds = getCredentials();
+  if (!proxy && !creds) return { token: null, mode: "anonymous" };
+
+  if (cachedToken && Date.now() < cachedToken.expiresAt - 60_000) {
+    return { token: cachedToken.value, mode: "oauth" };
+  }
+
+  try {
+    const minted = proxy
+      ? await fetchTokenViaProxy(proxy)
+      : await fetchTokenDirect(creds!);
+    cachedToken = {
+      value: minted.token,
+      expiresAt: Date.now() + minted.expiresIn * 1000,
+    };
+    return { token: cachedToken.value, mode: "oauth" };
+  } catch (err) {
+    // Credentials/proxy configured but auth path failed — do not claim anonymous.
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`OpenSky OAuth unreachable: ${msg}`);
+  }
+}
+
+function apiUrl(path: string): string {
+  const proxy = getProxyConfig();
+  if (proxy) {
+    const p = path.startsWith("/") ? path : `/${path}`;
+    return `${proxy.base}/api${p}`;
+  }
+  return `${OPENSKY.apiBase}${path}`;
 }
 
 async function openskyFetch(
@@ -122,9 +192,18 @@ async function openskyFetch(
   attempt = 0
 ): Promise<Response> {
   const headers: HeadersInit = { Accept: "application/json" };
-  if (token) headers.Authorization = `Bearer ${token}`;
+  const proxy = getProxyConfig();
+  if (proxy) {
+    headers["X-Proxy-Secret"] = proxy.secret;
+  }
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+    // When proxying, also send OpenSky token on a dedicated header in case
+    // Authorization is reserved for proxy auth in some gateways.
+    if (proxy) headers["X-OpenSky-Authorization"] = `Bearer ${token}`;
+  }
   const res = await safeFetch(
-    `${OPENSKY.apiBase}${path}`,
+    apiUrl(path),
     {
       headers,
       cache: "no-store",
@@ -233,34 +312,59 @@ export async function fetchAirportFlights(
   begin: number,
   end: number
 ): Promise<{ flights: OpenSkyFlight[]; mode: AuthMode }> {
-  const { token, mode } = await getAccessToken();
+  let token: string | null = null;
+  let mode: AuthMode = "anonymous";
+  let oauthError: Error | null = null;
+
+  if (hasOpenskyCredentials()) {
+    try {
+      const auth = await getAccessToken();
+      token = auth.token;
+      mode = auth.mode;
+    } catch (err) {
+      oauthError = err instanceof Error ? err : new Error(String(err));
+      mode = "oauth_unreachable";
+      token = null;
+    }
+  }
+
   const paceMs = mode === "oauth" ? 250 : 1200;
 
-  // Departures first (most relevant for noise screening), then arrivals.
-  const deps = await fetchFlightsEndpoint(
-    "departure",
-    airport,
-    begin,
-    end,
-    token,
-    paceMs
-  );
-  await sleep(paceMs);
-  const arrs = await fetchFlightsEndpoint(
-    "arrival",
-    airport,
-    begin,
-    end,
-    token,
-    paceMs
-  ).catch(() => [] as OpenSkyFlight[]);
+  try {
+    // Departures first (most relevant for noise screening), then arrivals.
+    const deps = await fetchFlightsEndpoint(
+      "departure",
+      airport,
+      begin,
+      end,
+      token,
+      paceMs
+    );
+    await sleep(paceMs);
+    const arrs = await fetchFlightsEndpoint(
+      "arrival",
+      airport,
+      begin,
+      end,
+      token,
+      paceMs
+    ).catch(() => [] as OpenSkyFlight[]);
 
-  const byKey = new Map<string, OpenSkyFlight>();
-  for (const f of [...deps, ...arrs]) {
-    const key = `${f.icao24}:${f.firstSeen}`;
-    if (!byKey.has(key)) byKey.set(key, f);
+    const byKey = new Map<string, OpenSkyFlight>();
+    for (const f of [...deps, ...arrs]) {
+      const key = `${f.icao24}:${f.firstSeen}`;
+      if (!byKey.has(key)) byKey.set(key, f);
+    }
+    return { flights: [...byKey.values()], mode };
+  } catch (apiErr) {
+    if (oauthError) {
+      throw Object.assign(oauthError, {
+        authMode: "oauth_unreachable" as const,
+        cause: apiErr,
+      });
+    }
+    throw apiErr;
   }
-  return { flights: [...byKey.values()], mode };
 }
 
 export async function fetchTrack(
@@ -273,7 +377,13 @@ export async function fetchTrack(
   const cached = cacheGet<TrackPoint[]>(cacheKey);
   if (cached) return cached;
 
-  const { token } = await getAccessToken();
+  let token: string | null = null;
+  try {
+    const auth = await getAccessToken();
+    token = auth.token;
+  } catch {
+    token = null;
+  }
   const res = await openskyFetch(path, token);
   if (res.status === 404 || res.status === 204) {
     cacheSet(cacheKey, [], 120_000);

@@ -104,7 +104,8 @@ export async function buildReport(
     );
   }
 
-  let mode: "anonymous" | "oauth" | "demo" = "anonymous";
+  let mode: "anonymous" | "oauth" | "oauth_unreachable" | "demo" =
+    "anonymous";
   let sourceNote =
     "OpenSky Network (KFFZ flights) + ADS-B.lol traces when available";
   let rawFlights;
@@ -113,9 +114,17 @@ export async function buildReport(
     { registration: string | null; type: string | null }
   >();
   const credsConfigured = hasOpenskyCredentials();
+  const proxyConfigured = Boolean(
+    (process.env.OPENSKY_PROXY_URL || process.env.OPENSKY_TOKEN_PROXY_URL)?.trim() &&
+      process.env.OPENSKY_PROXY_SECRET?.trim()
+  );
   if (!credsConfigured) {
     limitations.push(
-      "OPENSKY_CLIENT_ID / OPENSKY_CLIENT_SECRET are not set on this deployment — using anonymous OpenSky limits (or ADS-B.lol fallback)."
+      "OpenSky OAuth is not configured (no client credentials and no OPENSKY_PROXY_URL) — anonymous limits or ADS-B.lol fallback."
+    );
+  } else if (proxyConfigured) {
+    limitations.push(
+      "OpenSky OAuth is configured via Cloudflare egress proxy (OPENSKY_PROXY_URL)."
     );
   } else {
     limitations.push(
@@ -132,17 +141,34 @@ export async function buildReport(
         !isKiwaAirportCode(f.estArrivalAirport)
     );
     mode = result.mode;
+    if (mode === "oauth_unreachable") {
+      limitations.push(
+        "OpenSky OAuth is configured but the auth host was unreachable; used anonymous OpenSky API where possible (lower rate limits)."
+      );
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : "OpenSky unavailable";
-    limitations.push(
-      `OpenSky airport list failed (${msg}). Using ADS-B.lol nearby fallback.`
-    );
+    const authHint =
+      err &&
+      typeof err === "object" &&
+      "authMode" in err &&
+      (err as { authMode?: string }).authMode === "oauth_unreachable";
+    if (credsConfigured || authHint) {
+      mode = "oauth_unreachable";
+      limitations.push(
+        `OpenSky OAuth is configured but unreachable (${msg}). Using ADS-B.lol nearby fallback — overnight KFFZ arrival/departure lists may be incomplete.`
+      );
+    } else {
+      mode = "anonymous";
+      limitations.push(
+        `OpenSky airport list failed (${msg}). Using ADS-B.lol nearby fallback.`
+      );
+    }
     const fb = await discoverFlightsViaAdsbLol(cappedBegin, end);
     rawFlights = fb.flights;
     metaByIcao = fb.metaByIcao;
     sourceNote =
-      "ADS-B.lol nearby aircraft + day traces (OpenSky unavailable — coverage limited to aircraft with traces)";
-    mode = "anonymous";
+      "ADS-B.lol nearby aircraft + day traces (OpenSky unavailable — coverage limited to aircraft with traces; may miss landed overnight ops and can leak Gateway-area aircraft before geo filters)";
   }
 
   if (!rawFlights.length) {

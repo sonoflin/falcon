@@ -9,7 +9,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "opensky:proxy": "node scripts/opensky-local-proxy.mjs",
+    "opensky:proxy:worker": "npx wrangler deploy -c workers/opensky-proxy/wrangler.jsonc"
   },
   "dependencies": {
     "@turf/bearing": "^7.4.0",

@@ -1,0 +1,7 @@
+{
+  "name": "falcon-opensky-proxy",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-09-01",
+  "workers_dev": true,
+  "account_id": "dd1be9f09f09cd15c20dccccc7eccd47"
+}

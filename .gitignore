@@ -49,3 +49,6 @@ credentials.json
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+.env.vercel.pull
+.env*.local

@@ -3,13 +3,20 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FlightList } from "@/components/FlightList";
 import { TimePresets } from "@/components/TimePresets";
-import { formatPhoenix, type PresetId } from "@/lib/time";
+import type { PresetId } from "@/lib/time";
 import type { AnalyzedFlight, ReportMeta, Severity } from "@/lib/types";
 
 type ReportPayload = {
   meta: ReportMeta;
   flights: AnalyzedFlight[];
-  window: { begin: number; end: number; label: string; preset: PresetId };
+  window: {
+    begin: number;
+    end: number;
+    label: string;
+    rangeLabel: string;
+    preset: PresetId;
+    partial?: boolean;
+  };
 };
 
 export function ReportDashboard() {
@@ -123,11 +130,16 @@ export function ReportDashboard() {
         <div>
           {data ? (
             <>
-              <p className="text-sm text-stone-600">
-                {data.window.label} · {formatPhoenix(data.window.begin)} –{" "}
-                {formatPhoenix(data.window.end)} MST
+              <p className="text-xs uppercase tracking-wide text-stone-500">
+                Showing · America/Phoenix
+                {data.window.partial ? " · window still open" : ""}
               </p>
-              <p className="mt-1 text-2xl sm:text-3xl font-semibold tracking-tight text-stone-900">
+              <p className="mt-0.5 text-base sm:text-lg font-medium text-stone-900">
+                {data.window.rangeLabel ||
+                  `${data.window.label}`}
+              </p>
+              <p className="text-sm text-stone-600">{data.window.label}</p>
+              <p className="mt-2 text-2xl sm:text-3xl font-semibold tracking-tight text-stone-900">
                 {data.meta.flaggedCount} screening{" "}
                 {data.meta.flaggedCount === 1 ? "flag" : "flags"}
                 <span className="text-base font-normal text-stone-500 ml-2">
@@ -212,7 +224,12 @@ export function ReportDashboard() {
             <summary className="cursor-pointer text-stone-600">Data notes</summary>
             <ul className="mt-2 list-disc pl-5 space-y-1">
               <li>Source: {data.meta.source}</li>
-              <li>Auth: {data.meta.authMode}</li>
+              <li>
+                Auth:{" "}
+                {data.meta.authMode === "oauth_unreachable"
+                  ? "oauth configured but OpenSky unreachable from this host"
+                  : data.meta.authMode}
+              </li>
               <li>Generated: {data.meta.generatedAt}</li>
               {data.meta.limitations.map((l) => (
                 <li key={l}>{l}</li>
