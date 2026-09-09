@@ -1,10 +1,11 @@
 /**
- * OpenSky egress proxy for Falcon.
- * Vercel serverless often cannot TCP-connect to auth.opensky-network.org;
- * Cloudflare Workers typically can. This Worker mints OAuth tokens and can
- * optionally forward authenticated OpenSky REST calls.
+ * OpenSky egress proxy for Falcon (Cloudflare Worker).
  *
- * Auth: every non-public route requires header `X-Proxy-Secret: <PROXY_SECRET>`.
+ * Security:
+ * - Proxied routes require X-Proxy-Secret (or Bearer) — not an open relay
+ * - Only OpenSky token URL + allowlisted /api paths (no arbitrary SSRF)
+ * - Health/probe never mint tokens or return secrets
+ * - Short upstream timeouts + simple in-memory rate limit
  */
 export interface Env {
   PROXY_SECRET: string;
@@ -15,12 +16,27 @@ export interface Env {
 const TOKEN_URL =
   "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token";
 const API_BASE = "https://opensky-network.org/api";
+const UPSTREAM_TIMEOUT_MS = 20_000;
+const RATE_WINDOW_MS = 60_000;
+const RATE_MAX = 60;
+
+/** Falcon only needs these OpenSky REST prefixes. */
+const API_ALLOWLIST = [
+  /^\/flights\/(departure|arrival)(\?|$)/,
+  /^\/tracks\/all(\?|$)/,
+  /^\/states\/all(\?|$)/,
+  /^\/metadata\/aircraft\/[a-f0-9]{6}$/i,
+];
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Proxy-Secret",
+  "Access-Control-Allow-Headers":
+    "Content-Type, Authorization, X-Proxy-Secret, X-OpenSky-Authorization",
 };
+
+type Bucket = { reset: number; count: number };
+const rateBuckets = new Map<string, Bucket>();
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -33,6 +49,29 @@ function unauthorized(): Response {
   return json({ error: "unauthorized" }, 401);
 }
 
+function clientKey(req: Request): string {
+  return (
+    req.headers.get("CF-Connecting-IP") ||
+    req.headers.get("X-Forwarded-For")?.split(",")[0]?.trim() ||
+    "unknown"
+  );
+}
+
+function rateLimit(req: Request): Response | null {
+  const key = clientKey(req);
+  const now = Date.now();
+  let b = rateBuckets.get(key);
+  if (!b || now > b.reset) {
+    b = { reset: now + RATE_WINDOW_MS, count: 0 };
+    rateBuckets.set(key, b);
+  }
+  b.count += 1;
+  if (b.count > RATE_MAX) {
+    return json({ error: "rate_limited" }, 429);
+  }
+  return null;
+}
+
 function checkSecret(req: Request, env: Env): boolean {
   const header = req.headers.get("X-Proxy-Secret") || "";
   const bearer = req.headers.get("Authorization") || "";
@@ -40,6 +79,23 @@ function checkSecret(req: Request, env: Env): boolean {
     ? bearer.slice(7).trim()
     : "";
   return Boolean(env.PROXY_SECRET) && (header === env.PROXY_SECRET || token === env.PROXY_SECRET);
+}
+
+function apiPathAllowed(pathWithQuery: string): boolean {
+  return API_ALLOWLIST.some((re) => re.test(pathWithQuery));
+}
+
+async function fetchUpstream(
+  url: string,
+  init: RequestInit
+): Promise<Response> {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), UPSTREAM_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...init, signal: ac.signal });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function mintToken(env: Env): Promise<Response> {
@@ -53,7 +109,7 @@ async function mintToken(env: Env): Promise<Response> {
   });
   let upstream: Response;
   try {
-    upstream = await fetch(TOKEN_URL, {
+    upstream = await fetchUpstream(TOKEN_URL, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body,
@@ -62,7 +118,7 @@ async function mintToken(env: Env): Promise<Response> {
     const detail = err instanceof Error ? err.message : String(err);
     return json(
       {
-        error: "OpenSky auth unreachable from Cloudflare Worker",
+        error: "OpenSky auth unreachable from proxy host",
         detail,
       },
       502
@@ -79,22 +135,24 @@ async function mintToken(env: Env): Promise<Response> {
 }
 
 async function proxyApi(req: Request, pathWithQuery: string): Promise<Response> {
+  if (!apiPathAllowed(pathWithQuery)) {
+    return json({ error: "path_not_allowed" }, 403);
+  }
   const url = `${API_BASE}${pathWithQuery.startsWith("/") ? pathWithQuery : `/${pathWithQuery}`}`;
   const headers = new Headers();
   headers.set("Accept", req.headers.get("Accept") || "application/json");
-  // Prefer dedicated OpenSky token header; fall back to Authorization when it
-  // is not the proxy secret itself.
   const openskyAuth = req.headers.get("X-OpenSky-Authorization");
   const auth = req.headers.get("Authorization");
   if (openskyAuth) {
     headers.set("Authorization", openskyAuth);
-  } else if (auth) {
+  } else if (auth && req.headers.get("X-Proxy-Secret")) {
+    // Proxy secret is on dedicated header; Authorization is the OpenSky bearer.
     headers.set("Authorization", auth);
   }
 
   let upstream: Response;
   try {
-    upstream = await fetch(url, {
+    upstream = await fetchUpstream(url, {
       method: req.method,
       headers,
       redirect: "follow",
@@ -102,7 +160,7 @@ async function proxyApi(req: Request, pathWithQuery: string): Promise<Response> 
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     return json(
-      { error: "OpenSky API unreachable from Cloudflare Worker", detail },
+      { error: "OpenSky API unreachable from proxy host", detail },
       502
     );
   }
@@ -117,47 +175,42 @@ async function proxyApi(req: Request, pathWithQuery: string): Promise<Response> 
 
 async function probe(): Promise<Response> {
   const results: Record<string, unknown> = {};
-  for (const [name, target] of [
-    ["auth", TOKEN_URL],
-    ["api", `${API_BASE}/states/all?icao24=a00001`],
-  ] as const) {
-    const started = Date.now();
-    try {
-      const res = await fetch(target, {
-        method: name === "auth" ? "OPTIONS" : "GET",
-        headers: { Accept: "application/json" },
-      });
-      // OPTIONS may not be allowed; try GET/HEAD-ish via GET for api, POST empty for auth probe differently
-      results[name] = {
-        ok: res.status < 500,
-        status: res.status,
-        ms: Date.now() - started,
-      };
-    } catch (err) {
-      results[name] = {
-        ok: false,
-        error: err instanceof Error ? err.message : String(err),
-        ms: Date.now() - started,
-      };
-    }
-  }
-  // Stronger auth probe: TCP/TLS handshake via POST without valid body still proves reachability
   {
     const started = Date.now();
     try {
-      const res = await fetch(TOKEN_URL, {
+      const res = await fetchUpstream(TOKEN_URL, {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: "grant_type=client_credentials&client_id=probe&client_secret=probe",
       });
       results.authPost = {
-        ok: res.status !== 0,
+        ok: res.status < 500,
         status: res.status,
         ms: Date.now() - started,
         note: "401/400 means host reachable; network errors mean blocked",
       };
     } catch (err) {
       results.authPost = {
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+        ms: Date.now() - started,
+      };
+    }
+  }
+  {
+    const started = Date.now();
+    try {
+      const res = await fetchUpstream(`${API_BASE}/states/all?icao24=a00001`, {
+        method: "GET",
+        headers: { Accept: "application/json" },
+      });
+      results.api = {
+        ok: res.status < 500,
+        status: res.status,
+        ms: Date.now() - started,
+      };
+    } catch (err) {
+      results.api = {
         ok: false,
         error: err instanceof Error ? err.message : String(err),
         ms: Date.now() - started,
@@ -172,6 +225,9 @@ export default {
     if (request.method === "OPTIONS") {
       return new Response(null, { status: 204, headers: cors });
     }
+
+    const limited = rateLimit(request);
+    if (limited) return limited;
 
     const url = new URL(request.url);
     const path = url.pathname.replace(/\/+$/, "") || "/";

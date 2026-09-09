@@ -20,10 +20,11 @@ Open [http://localhost:3000](http://localhost:3000).
 | --- | --- | --- |
 | `OPENSKY_CLIENT_ID` | No* | OpenSky OAuth2 client id (higher rate limits) |
 | `OPENSKY_CLIENT_SECRET` | No* | OpenSky OAuth2 client secret |
-| `OPENSKY_PROXY_URL` | No* | Cloudflare Worker base URL that can reach OpenSky auth/API |
-| `OPENSKY_PROXY_SECRET` | No* | Shared secret for the egress proxy |
+| `OPENSKY_EGRESS_PROXY_*` | No* | Server-side HTTP CONNECT egress when the host cannot reach OpenSky |
+| `OPENSKY_PROXY_URL` | No* | Optional dedicated Falcon proxy base URL (secret-gated) |
+| `OPENSKY_PROXY_SECRET` | No* | Shared secret for the dedicated Falcon proxy |
 
-\*Prefer client credentials locally. On Vercel, if `auth.opensky-network.org` is blocked, deploy `workers/opensky-proxy` and set `OPENSKY_PROXY_URL` + `OPENSKY_PROXY_SECRET` (Worker holds the OpenSky client secrets).
+\*Prefer client credentials on the host. On Vercel, if `auth.opensky-network.org` is blocked, set `OPENSKY_EGRESS_PROXY_HOST` / `USER` / `PASS` (and optional `PORT`) so server-side fetches use CONNECT egress. Alternatively deploy a dedicated Falcon proxy and set `OPENSKY_PROXY_URL` + `OPENSKY_PROXY_SECRET`. Never use `NEXT_PUBLIC_*` for secrets.
 
 Create an API client at [OpenSky Network](https://opensky-network.org/) → Account → API clients (client credentials flow). Without credentials the app uses anonymous REST access (more rate limiting).
 
@@ -104,34 +105,28 @@ GitHub Actions secrets **are** useful later if you add a workflow that deploys (
 3. **Project → Settings → Environment Variables** (Production + Preview):
    - `OPENSKY_CLIENT_ID` = your OpenSky API client id
    - `OPENSKY_CLIENT_SECRET` = your OpenSky API client secret  
-   - If Vercel cannot reach `auth.opensky-network.org` (connect timeout), also set:
-     - `OPENSKY_PROXY_URL` = egress proxy base URL (see below)
-     - `OPENSKY_PROXY_SECRET` = shared secret for that proxy
+   - If Vercel cannot reach `auth.opensky-network.org` (connect timeout), also set server-only CONNECT egress:
+     - `OPENSKY_EGRESS_PROXY_HOST` / `OPENSKY_EGRESS_PROXY_PORT` / `OPENSKY_EGRESS_PROXY_USER` / `OPENSKY_EGRESS_PROXY_PASS`
+     - (or a single `OPENSKY_EGRESS_PROXY_URL`)
+   - Do **not** rely on a laptop + `cloudflared` quick tunnel for production demos
 4. Redeploy after changing env vars (Vercel does not always hot-reload secrets into existing lambdas).
 
-### OpenSky egress proxy (Vercel / Cloudflare datacenter blocks)
+### OpenSky cloud egress (no laptop / no tunnel)
 
-OpenSky’s auth host (and often the REST API) are reachable from residential networks but return connect timeouts / 522 from **Vercel** and **Cloudflare Workers**. Credentials on Vercel alone are not enough.
+OpenSky’s auth host is often **unreachable from Vercel and Cloudflare Workers** (connect timeout / 522). Credentials alone on Vercel are not enough.
 
-**Working demo path (tonight):** run a local proxy on a machine that can reach OpenSky, expose it with Cloudflare Tunnel, point Vercel at it:
+**Production path (100% cloud):** set server-side CONNECT egress on Vercel so Falcon reaches OpenSky without a public application proxy:
 
-```bash
-# Terminal A — mint tokens + proxy API (uses Downloads/credentials.json or env)
-export CREDENTIALS_JSON="$HOME/Downloads/credentials.json"
-export PROXY_SECRET="choose-a-long-random-secret"
-export PORT=8791
-npm run opensky:proxy
+| Variable | Notes |
+| --- | --- |
+| `OPENSKY_CLIENT_ID` / `OPENSKY_CLIENT_SECRET` | OpenSky OAuth client (server-only) |
+| `OPENSKY_EGRESS_PROXY_HOST` / `PORT` / `USER` / `PASS` | HTTP CONNECT proxy that can reach OpenSky (server-only; never `NEXT_PUBLIC_*`) |
 
-# Terminal B — public URL for Vercel
-cloudflared tunnel --url http://127.0.0.1:8791
-# → https://….trycloudflare.com  (ephemeral; keep both processes running for the demo)
-```
+Do **not** keep a laptop + `cloudflared` quick tunnel running. Ephemeral `*.trycloudflare.com` URLs are deprecated for demos.
 
-Set `OPENSKY_PROXY_URL` to that tunnel URL and `OPENSKY_PROXY_SECRET` to the same secret on Vercel Production, then redeploy.
+**Optional dedicated proxy:** `scripts/opensky-local-proxy.mjs` / `workers/opensky-proxy` implement a secret-gated, path-allowlisted Falcon proxy (`OPENSKY_PROXY_URL` + `OPENSKY_PROXY_SECRET`). Use only on a host that can reach OpenSky (or that itself uses CONNECT egress). See `deploy/opensky-proxy/`. Cloudflare Workers currently cannot reach OpenSky (522); prefer Vercel + `OPENSKY_EGRESS_PROXY_*`.
 
-Repo also includes `workers/opensky-proxy` (same protocol). Deploy with `npm run opensky:proxy:worker` if OpenSky ever allows Cloudflare egress; today the Worker probe gets **522** to both auth and API.
-
-Without a working proxy, Falcon falls back to ADS-B.lol nearby discovery (`authMode: oauth_unreachable` when OAuth is configured but blocked).
+Without working egress, Falcon falls back to ADS-B.lol nearby discovery (`authMode: oauth_unreachable` when OAuth is configured but blocked).
 
 No other env vars are required. (`DEMO_MODE` in `.env.example` is unused.)
 

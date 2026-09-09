@@ -38,10 +38,14 @@ yarn-error.log*
 .env.local
 .env.*.local
 !.env.example
+.env.vercel.prod.check
+.env.deploy.local
+**/\.env.deploy.local
 
 # API / OAuth credential dumps (never commit)
 credentials.json
 **/credentials.json
+deploy/opensky-proxy/.env.deploy.local
 
 # vercel
 .vercel

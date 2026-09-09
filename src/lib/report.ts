@@ -118,13 +118,23 @@ export async function buildReport(
     (process.env.OPENSKY_PROXY_URL || process.env.OPENSKY_TOKEN_PROXY_URL)?.trim() &&
       process.env.OPENSKY_PROXY_SECRET?.trim()
   );
+  const egressConfigured = Boolean(
+    process.env.OPENSKY_EGRESS_PROXY_URL?.trim() ||
+      (process.env.OPENSKY_EGRESS_PROXY_HOST?.trim() &&
+        process.env.OPENSKY_EGRESS_PROXY_USER?.trim() &&
+        process.env.OPENSKY_EGRESS_PROXY_PASS?.trim())
+  );
   if (!credsConfigured) {
     limitations.push(
       "OpenSky OAuth is not configured (no client credentials and no OPENSKY_PROXY_URL) — anonymous limits or ADS-B.lol fallback."
     );
   } else if (proxyConfigured) {
     limitations.push(
-      "OpenSky OAuth is configured via Cloudflare egress proxy (OPENSKY_PROXY_URL)."
+      "OpenSky OAuth is configured via secured application proxy (OPENSKY_PROXY_URL)."
+    );
+  } else if (egressConfigured) {
+    limitations.push(
+      "OpenSky OAuth uses server-side CONNECT egress (OPENSKY_EGRESS_PROXY_*) for cloud hosts that cannot reach OpenSky directly."
     );
   } else {
     limitations.push(

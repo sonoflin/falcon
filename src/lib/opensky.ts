@@ -1,5 +1,9 @@
 import { OPENSKY } from "./constants";
 import { metersToFeet } from "./geography";
+import {
+  hasOpenskyEgressProxy,
+  openskyEgressFetch,
+} from "./opensky-egress";
 import type { OpenSkyFlight, TrackPoint } from "./types";
 
 export type AuthMode = "anonymous" | "oauth" | "oauth_unreachable";
@@ -75,6 +79,12 @@ async function safeFetch(
   context: string
 ): Promise<Response> {
   try {
+    // Direct OpenSky calls (token + API) may use CONNECT egress when Vercel
+    // cannot reach OpenSky; Falcon application proxies keep using global fetch.
+    const proxy = getProxyConfig();
+    if (!proxy && hasOpenskyEgressProxy()) {
+      return await openskyEgressFetch(url, init);
+    }
     return await fetch(url, init);
   } catch (err) {
     throw formatFetchFailure(context, err);
