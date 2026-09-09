@@ -63,13 +63,41 @@ The UI does **not** name or quote voluntary program branding.
 
 ## Deploy
 
-### Vercel
+**Recommended host:** [Vercel](https://vercel.com) (native Next.js App Router support). Cloudflare Pages/Workers can work but needs more adapter/config work for this app.
 
-```bash
-npx vercel
-```
+### GitHub Actions secrets vs hosting secrets
 
-Add `OPENSKY_CLIENT_ID` / `OPENSKY_CLIENT_SECRET` in project env. Serverless `maxDuration` should be ≥ 60s for report generation.
+Putting `OPENSKY_*` in **GitHub Actions secrets alone does not put the app on the web.** Those secrets are only available to CI workflows.
+
+This repo has **no** `.github/workflows` deploy pipeline. To run a public demo you need:
+
+1. A host that builds and serves the Next.js app (Vercel is simplest).
+2. **`OPENSKY_CLIENT_ID` / `OPENSKY_CLIENT_SECRET` set on that host** as **server-side** env vars (not `NEXT_PUBLIC_*`). The app reads them only in API routes / server code (`src/lib/opensky.ts`).
+
+GitHub Actions secrets **are** useful later if you add a workflow that deploys (e.g. `vercel deploy` or Cloudflare) and injects those values at deploy time — they still end up on the host, not “in GitHub” for runtime.
+
+**Never commit** `credentials.json`, `.env.local`, or real client secrets. Keep OpenSky files in Downloads / password manager only.
+
+### Checklist: public demo URL
+
+1. Push this repo to GitHub (already: `sonoflin/falcon`).
+2. Import the project on [Vercel](https://vercel.com/new) → Framework: Next.js → Deploy.
+3. **Project → Settings → Environment Variables** (Production + Preview):
+   - `OPENSKY_CLIENT_ID` = your OpenSky API client id
+   - `OPENSKY_CLIENT_SECRET` = your OpenSky API client secret  
+   No other env vars are required. (`DEMO_MODE` in `.env.example` is unused.)
+4. Redeploy after saving env vars so the new secrets apply.
+5. Open the `*.vercel.app` URL and run **Staff off** or **Quiet hours** (short overnight windows). Avoid “last 7 nights” for a live walkthrough — longer windows hit rate limits and approach the 60s serverless timeout.
+
+Report/export routes set `maxDuration = 60`. On Vercel Hobby the effective limit may be lower; if reports time out, use a Pro plan or a shorter preset.
+
+### Demo reliability tips
+
+- **With OAuth credentials** on the host: much more reliable than anonymous OpenSky quotas.
+- **Without credentials:** anonymous OpenSky is easy to rate-limit; the app falls back to ADS-B.lol nearby aircraft + day traces (may miss planes no longer transmitting).
+- Prefer overnight presets over multi-day custom ranges for colleagues.
+- First load after idle can be slow (cold start + API fetches); wait for the report, then drill into individual flights.
+- Credentials stay server-side; colleagues only need the URL (consider Vercel Deployment Protection / password if the demo should stay private).
 
 ### Local production
 

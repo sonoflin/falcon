@@ -36,6 +36,10 @@ yarn-error.log*
 .env.*.local
 !.env.example
 
+# API / OAuth credential dumps (never commit)
+credentials.json
+**/credentials.json
+
 # vercel
 .vercel
 
