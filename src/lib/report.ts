@@ -134,7 +134,7 @@ export async function buildReport(
     );
   } else if (egressConfigured) {
     limitations.push(
-      "OpenSky OAuth uses server-side CONNECT egress (OPENSKY_EGRESS_PROXY_*) for cloud hosts that cannot reach OpenSky directly."
+      "OpenSky OAuth uses server-side CONNECT egress for cloud hosts that cannot reach OpenSky directly."
     );
   } else {
     limitations.push(
