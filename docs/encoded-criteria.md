@@ -44,6 +44,14 @@ Field elevation used: ~1,394 ft MSL.
 
 See `src/lib/analysis.ts` and `src/lib/constants.ts`.
 
+### Airport identity (KFFZ vs KIWA)
+
+Screening lists are **Falcon Field (KFFZ) only**. Mesa Gateway (KIWA / IWA) is ~10 NM south and must not appear as FFZ traffic.
+
+- OpenSky flight lists use `airport=KFFZ` (arrival + departure).
+- After tracks load, `isKffzLocalTrack` requires closest approach ≤ ~4 NM of KFFZ ARP and rejects tracks closer to KIWA’s terminal area than to KFFZ.
+- ADS-B.lol fallback searches ≤ ~8 NM of KFFZ (below KFFZ–KIWA separation) and applies the same dual gate.
+
 ### Finding codes
 
 | Code | Intent |

@@ -1,5 +1,5 @@
-import { ADSB_LOL, FFZ } from "./constants";
-import { distFromFfzNm } from "./geography";
+import { ADSB_LOL, AIRPORT_FILTER, FFZ } from "./constants";
+import { distFromFfzNm, isKffzLocalTrack } from "./geography";
 import type { OpenSkyFlight, TrackPoint } from "./types";
 
 type AdsbLolAircraft = {
@@ -42,7 +42,7 @@ async function adsbFetch(url: string): Promise<Response> {
 }
 
 export async function fetchNearbyLive(
-  distNm = 15
+  distNm = AIRPORT_FILTER.adsbNearbyNm
 ): Promise<AdsbLolAircraft[]> {
   const url = `${ADSB_LOL.apiBase}/lat/${FFZ.lat}/lon/${FFZ.lon}/dist/${distNm}`;
   const res = await adsbFetch(url);
@@ -143,7 +143,8 @@ export async function discoverFlightsViaAdsbLol(
   flights: OpenSkyFlight[];
   metaByIcao: Map<string, { registration: string | null; type: string | null }>;
 }> {
-  const live = await fetchNearbyLive(20);
+  // Radius kept below KFFZ–KIWA separation so Gateway live traffic is not pulled in.
+  const live = await fetchNearbyLive(AIRPORT_FILTER.adsbNearbyNm);
   const metaByIcao = new Map<
     string,
     { registration: string | null; type: string | null }
@@ -187,9 +188,11 @@ export async function discoverFlightsViaAdsbLol(
     }
     const windowTrack = filterTrackToWindow(day.track, begin, end);
     const near = windowTrack.filter(
-      (p) => distFromFfzNm(p.lat, p.lon) <= 10
+      (p) => distFromFfzNm(p.lat, p.lon) <= AIRPORT_FILTER.kffzAssociationNm
     );
     if (near.length < 2) continue;
+    // Dual gate: near KFFZ and not primarily a KIWA/Gateway operation.
+    if (!isKffzLocalTrack(windowTrack)) continue;
 
     flights.push({
       icao24: hex,

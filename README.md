@@ -31,6 +31,8 @@ Create an API client at [OpenSky Network](https://opensky-network.org/) → Acco
 
 **Fallback when OpenSky is rate-limited:** ADS-B.lol live aircraft near KFFZ + their day traces (may miss aircraft that are no longer transmitting)
 
+**Airport identity:** Lists are KFFZ-only. OpenSky queries `airport=KFFZ`; tracks must approach Falcon Field (≤ ~4 NM) and are dropped when activity is centered on Mesa Gateway (KIWA / IWA, ~10 NM south). ADS-B.lol nearby search uses an 8 NM radius so Gateway ARP traffic is not discovered as Falcon Field ops.
+
 **Geography:** City of Mesa boundary from OpenStreetMap via Nominatim (`src/data/mesa-boundary.json`)
 
 Each flagged flight links to a public globe view and shows timestamps, altitudes (ft MSL), and distances for verification.

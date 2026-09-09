@@ -21,6 +21,39 @@ export const FFZ = {
   rwy22Threshold: { lat: 33.4661, lon: -111.7231 },
 } as const;
 
+/**
+ * Phoenix-Mesa Gateway (KIWA / IWA) — ~10 NM south of KFFZ.
+ * Used only to exclude Gateway-centered traffic from FFZ screening lists.
+ */
+export const KIWA = {
+  icao: "KIWA",
+  iata: "IWA",
+  name: "Phoenix-Mesa Gateway Airport",
+  lat: 33.3078,
+  lon: -111.6556,
+} as const;
+
+/**
+ * Deterministic airport-identity filter (KFFZ vs KIWA).
+ * Airports are ~9.9 NM apart — geo association is reliable at these thresholds.
+ */
+export const AIRPORT_FILTER = {
+  /** Closest approach to KFFZ ARP must be ≤ this NM. */
+  kffzAssociationNm: 4,
+  /** Within this of KIWA ARP counts as Gateway-terminal activity. */
+  kiwaTerminalNm: 3.5,
+  /**
+   * Reject when min(KIWA) + margin < min(KFFZ): track is Gateway-centered
+   * even if it briefly drifted toward Falcon Field.
+   */
+  preferMarginNm: 1.5,
+  /**
+   * ADS-B.lol live nearby search radius. Kept below KFFZ–KIWA separation
+   * so Gateway ARP traffic is not discovered as “near Falcon Field.”
+   */
+  adsbNearbyNm: 8,
+} as const;
+
 /** Pattern altitudes MSL (feet) from official FFZ noise abatement guidance (rev 11/04/2024). */
 export const PATTERN_ALT_MSL = {
   turbine: 2900,
@@ -70,9 +103,12 @@ export const RADII_NM = {
   finalApproachNm: 1.0,
 } as const;
 
-/** Bounding box for OpenSky states / regional focus (Mesa + north of field). */
+/**
+ * Bounding box for OpenSky states / regional focus (Mesa + north of field).
+ * Southern edge stays north of KIWA ARP (~33.31°) to avoid Gateway-centric pulls.
+ */
 export const REGION_BBOX = {
-  lamin: 33.3,
+  lamin: 33.36,
   lomin: -111.95,
   lamax: 33.75,
   lomax: -111.5,

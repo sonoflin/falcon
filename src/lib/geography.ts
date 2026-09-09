@@ -5,7 +5,15 @@ import {
 } from "@turf/turf";
 import type { Feature, MultiPolygon, Polygon } from "geojson";
 import mesaBoundary from "@/data/mesa-boundary.json";
-import { FFZ, HELI_CANAL, HELI_ROUTES, HELI_WEST_LON } from "./constants";
+import {
+  AIRPORT_FILTER,
+  FFZ,
+  HELI_CANAL,
+  HELI_ROUTES,
+  HELI_WEST_LON,
+  KIWA,
+} from "./constants";
+import type { TrackPoint } from "./types";
 
 const mesaFeature = mesaBoundary as Feature<Polygon | MultiPolygon>;
 
@@ -38,6 +46,54 @@ export function smBetween(
 
 export function distFromFfzNm(lat: number, lon: number): number {
   return nmBetween(lat, lon, FFZ.lat, FFZ.lon);
+}
+
+export function distFromKiwaNm(lat: number, lon: number): number {
+  return nmBetween(lat, lon, KIWA.lat, KIWA.lon);
+}
+
+export function trackClosestApproaches(track: TrackPoint[]): {
+  minFfzNm: number;
+  minIwaNm: number;
+} {
+  let minFfzNm = Infinity;
+  let minIwaNm = Infinity;
+  for (const p of track) {
+    minFfzNm = Math.min(minFfzNm, distFromFfzNm(p.lat, p.lon));
+    minIwaNm = Math.min(minIwaNm, distFromKiwaNm(p.lat, p.lon));
+  }
+  return { minFfzNm, minIwaNm };
+}
+
+/**
+ * Deterministic KFFZ-only association for screening lists.
+ * Requires a close approach to Falcon Field and rejects tracks whose
+ * closest activity is centered on Mesa Gateway (KIWA / IWA).
+ */
+export function isKffzLocalTrack(track: TrackPoint[]): boolean {
+  if (track.length < 2) return false;
+  const { minFfzNm, minIwaNm } = trackClosestApproaches(track);
+  if (!Number.isFinite(minFfzNm)) return false;
+
+  if (minFfzNm > AIRPORT_FILTER.kffzAssociationNm) return false;
+
+  // Gateway-centered: came within KIWA terminal and stayed meaningfully closer
+  // to Gateway than to Falcon Field.
+  if (
+    minIwaNm <= AIRPORT_FILTER.kiwaTerminalNm &&
+    minIwaNm + AIRPORT_FILTER.preferMarginNm < minFfzNm
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+/** True when OpenSky (or fallback) airport codes clearly refer to Gateway. */
+export function isKiwaAirportCode(code: string | null | undefined): boolean {
+  if (!code) return false;
+  const u = code.trim().toUpperCase();
+  return u === "KIWA" || u === "IWA";
 }
 
 export function isInMesaCityLimits(lat: number, lon: number): boolean {

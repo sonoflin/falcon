@@ -5,6 +5,7 @@ import {
   filterTrackToWindow,
 } from "./adsblol";
 import { FFZ, OPENSKY } from "./constants";
+import { isKffzLocalTrack, isKiwaAirportCode } from "./geography";
 import {
   fetchAirportFlights,
   fetchTrack,
@@ -92,6 +93,7 @@ export async function buildReport(
     "Not detectable from ADS-B (non-goals): power/RPM/blade slap, Vy specifically, PAPI compliance, hover time, ATC clearances, or actual wind justifying runway choice.",
     `OpenSky REST airport lists are preferred; tracks prefer ADS-B.lol day traces when available.`,
     `OpenSky track lookback via REST is roughly ${OPENSKY.trackLookbackDays} days.`,
+    "Airport identity: only KFFZ (Falcon Field) operations — tracks must approach KFFZ and are excluded when centered on KIWA (Mesa Gateway).",
   ];
 
   const maxSpan = 36 * 3600;
@@ -123,7 +125,12 @@ export async function buildReport(
 
   try {
     const result = await fetchAirportFlights(FFZ.icao, cappedBegin, end);
-    rawFlights = result.flights;
+    // Drop any OpenSky rows that already name Gateway as dep/arr.
+    rawFlights = result.flights.filter(
+      (f) =>
+        !isKiwaAirportCode(f.estDepartureAirport) &&
+        !isKiwaAirportCode(f.estArrivalAirport)
+    );
     mode = result.mode;
   } catch (err) {
     const msg = err instanceof Error ? err.message : "OpenSky unavailable";
@@ -177,6 +184,13 @@ export async function buildReport(
       hint
     );
     await sleep(mode === "oauth" ? 80 : 200);
+
+    // Post-filter: require KFFZ proximity; reject Gateway-centered tracks
+    // (OpenSky mis-tags and ADS-B.lol nearby fallback can both leak KIWA).
+    if (loaded.track.length >= 2 && !isKffzLocalTrack(loaded.track)) {
+      return null;
+    }
+
     const meta = metaByIcao.get(flight.icao24);
     const aircraftType = loaded.type || meta?.type || null;
     const result = analyzeFlight(flight, loaded.track, { aircraftType });
@@ -190,7 +204,15 @@ export async function buildReport(
     };
   });
 
-  const withTracks = analyzed.filter((f) => f.track.length > 0);
+  const kept = analyzed.filter((f): f is AnalyzedFlight => f != null);
+  const droppedNonKffz = analyzed.length - kept.length;
+  if (droppedNonKffz > 0) {
+    limitations.push(
+      `Excluded ${droppedNonKffz} candidate(s) that did not associate with KFFZ (e.g. Mesa Gateway / KIWA or distant transit).`
+    );
+  }
+
+  const withTracks = kept.filter((f) => f.track.length > 0);
   const flagged = withTracks
     .filter((f) => f.findings.length > 0)
     .sort((a, b) => {
