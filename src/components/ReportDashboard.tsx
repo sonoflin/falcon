@@ -175,8 +175,8 @@ export function ReportDashboard() {
           Voluntary Fly Friendly screening — not enforcement
         </p>
         <p className="mt-1">
-          Flags below are review candidates against Mesa / KFFZ noise-abatement
-          guidance. Procedures are voluntary. This is screening only — not a
+          Flags below are review candidates against Falcon Field (KFFZ)
+          noise-abatement guidance. Procedures are voluntary. This is screening only — not a
           regulatory determination, citation, or “violator” list. Wind, ATC, and
           coverage gaps can explain many tracks.
         </p>

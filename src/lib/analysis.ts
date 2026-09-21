@@ -401,10 +401,10 @@ export function analyzeFlight(
       severity:
         worst.altFt != null && worst.altFt < patternAlt - 500 ? "high" : "medium",
       summary:
-        "Low altitude over Mesa city limits outside preferred departure corridor",
+        "Low altitude inside the city-limits boundary, outside the preferred departure corridor",
       evidence: [
         `${worst.altFt?.toLocaleString()} ft MSL at ${formatPhoenix(worst.time)} MST`,
-        `Inside City of Mesa boundary, ${distFromFfzNm(worst.lat, worst.lon).toFixed(2)} NM from KFFZ`,
+        `Inside the city-limits boundary, ${distFromFfzNm(worst.lat, worst.lon).toFixed(2)} NM from KFFZ`,
         `Bearing from field ${bearingDeg(FFZ.lat, FFZ.lon, worst.lat, worst.lon).toFixed(0)}°`,
       ],
       lat: worst.lat,

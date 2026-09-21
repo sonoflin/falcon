@@ -29,7 +29,7 @@ function sleep(ms: number) {
 }
 
 const UA =
-  "FFZ-Ops-Review/1.0 (+https://github.com/sonoflin/falcon; mesa-airport-ops-screening)";
+  "FFZ-Ops-Review/1.0 (+https://github.com/sonoflin/falcon)";
 
 async function adsbFetch(url: string): Promise<Response> {
   return fetch(url, {

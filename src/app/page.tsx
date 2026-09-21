@@ -13,7 +13,7 @@ export default function HomePage() {
         />
         <div className="mx-auto max-w-5xl px-4 sm:px-6 pt-10 sm:pt-14 pb-6">
           <p className="text-xs uppercase tracking-[0.2em] text-teal-900/80">
-            City of Mesa · Falcon Field
+            Falcon Field Airport · KFFZ
           </p>
           <h1 className="mt-3 font-[family-name:var(--font-display)] text-4xl sm:text-5xl md:text-6xl text-stone-900 tracking-tight leading-[1.05]">
             FFZ Ops Review
@@ -22,6 +22,9 @@ export default function HomePage() {
             Overnight and off-hours ADS-B screening for KFFZ Fly Friendly / noise
             guidance — altitudes, tracks, and verifiable evidence when staff cannot
             monitor in person. Screening flags are review candidates only.
+          </p>
+          <p className="mt-3 text-sm text-stone-500">
+            Independent review tool. Not an official government website.
           </p>
         </div>
       </div>
