@@ -108,27 +108,47 @@ GitHub Actions secrets **are** useful later if you add a workflow that deploys (
    - If Vercel cannot reach `auth.opensky-network.org` (connect timeout), also set server-only CONNECT egress:
      - `OPENSKY_EGRESS_PROXY_HOST` / `OPENSKY_EGRESS_PROXY_PORT` / `OPENSKY_EGRESS_PROXY_USER` / `OPENSKY_EGRESS_PROXY_PASS`
      - (or a single `OPENSKY_EGRESS_PROXY_URL`)
-   - Do **not** rely on a laptop + `cloudflared` quick tunnel for production demos
+   - Do **not** publish the app or the OpenSky proxy with an unprotected `cloudflared tunnel --url` Quick Tunnel
 4. Redeploy after changing env vars (Vercel does not always hot-reload secrets into existing lambdas).
 
-### OpenSky cloud egress (no laptop / no tunnel)
+### OpenSky cloud egress
 
 OpenSky’s auth host is often **unreachable from Vercel and Cloudflare Workers** (connect timeout / 522). Credentials alone on Vercel are not enough.
 
-**Production path (100% cloud):** set server-side CONNECT egress on Vercel so Falcon reaches OpenSky without a public application proxy:
+**Production path:** set server-side CONNECT egress on Vercel so Falcon reaches OpenSky without a public application proxy:
 
 | Variable | Notes |
 | --- | --- |
 | `OPENSKY_CLIENT_ID` / `OPENSKY_CLIENT_SECRET` | OpenSky OAuth client (server-only) |
 | `OPENSKY_EGRESS_PROXY_HOST` / `PORT` / `USER` / `PASS` | HTTP CONNECT proxy that can reach OpenSky (server-only; never `NEXT_PUBLIC_*`) |
 
-Do **not** keep a laptop + `cloudflared` quick tunnel running. Ephemeral `*.trycloudflare.com` URLs are deprecated for demos.
+Do **not** put the OpenSky proxy behind a Quick Tunnel. On October 2, 2026 Cloudflare added email one-time PIN protection for Quick Tunnels (`--allowed-mail` in cloudflared 2026.9.3 and newer). That check only works in an interactive browser, so Vercel’s server-side calls cannot complete it. A public `*.trycloudflare.com` hostname is still a poor place for the proxy: it changes every launch, has no uptime guarantee, and anyone who has the URL can reach the process.
 
 **Optional dedicated proxy:** `scripts/opensky-local-proxy.mjs` / `workers/opensky-proxy` implement a secret-gated, path-allowlisted Falcon proxy (`OPENSKY_PROXY_URL` + `OPENSKY_PROXY_SECRET`). Use only on a host that can reach OpenSky (or that itself uses CONNECT egress). See `deploy/opensky-proxy/`. Cloudflare Workers currently cannot reach OpenSky (522); prefer Vercel + `OPENSKY_EGRESS_PROXY_*`.
 
 Without working egress, Falcon falls back to ADS-B.lol nearby discovery (`authMode: oauth_unreachable` when OAuth is configured but blocked).
 
-No other env vars are required. (`DEMO_MODE` in `.env.example` is unused.)
+No other env vars are required for the hosted app. (`DEMO_MODE` in `.env.example` is unused.)
+
+### Local UI preview (protected Quick Tunnel)
+
+Production stays on Vercel. To show the Next.js UI running on this machine to a specific person, use a protected Quick Tunnel. `npm run tunnel` always passes `--allowed-mail` and only forwards the UI (default `http://127.0.0.1:3000`). It refuses the OpenSky proxy ports (8787 and 8791).
+
+```bash
+# cloudflared 2026.9.3 or newer
+# https://developers.cloudflare.com/tunnel/downloads/
+export TUNNEL_ALLOWED_MAIL='colleague@example.com'   # or '*@example.com'
+npm run dev      # terminal A
+npm run tunnel   # terminal B — prints the trycloudflare.com URL
+```
+
+Repeat addresses as a comma-separated list. Quote domain rules so the shell does not expand `*`. Visitors do not need a Cloudflare account. Access ends when `cloudflared` stops. Quick Tunnels still have no uptime guarantee, a new hostname on every start, a cap of 200 in-flight requests, and no Server-Sent Events.
+
+Use `npm run tunnel` rather than `wrangler tunnel quick-start`. Wrangler’s tunnel commands are experimental and do not apply this allowlist or the proxy-port refusal.
+
+cloudflared 2026.10.4 has not fixed [cloudflare/cloudflared#1752](https://github.com/cloudflare/cloudflared/issues/1752): the PIN session can expire after a few seconds, and later document, style, and script requests redirect to `login.trycloudflare.com`. This app’s content security policy (`script-src 'self'`, `style-src 'self'`) then blocks those responses. Leave the policy unchanged and use the Vercel URL if the preview bounces back to the PIN page. Do not add `login.trycloudflare.com` to the content security policy.
+
+On January 25, 2027, new cloudflared releases turn URL normalization on by default for ingress rules that require Cloudflare Access. This preview is a single catch-all origin with no Access ingress rules, so that default does not retarget requests. The path Next.js receives stays the original path. Named-tunnel ingress that checks Access should be tested with `--disable-path-normalization=false` before that date. This repo does not ship that kind of ingress.
 
 5. Open the `*.vercel.app` URL and run **Staff off** or **Quiet hours** (short overnight windows). Avoid “last 7 nights” for a live walkthrough — longer windows hit rate limits and approach the 60s serverless timeout.
 

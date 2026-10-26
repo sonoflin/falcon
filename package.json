@@ -11,7 +11,9 @@
     "start": "next start",
     "lint": "eslint",
     "opensky:proxy": "node scripts/opensky-local-proxy.mjs",
-    "opensky:proxy:worker": "npx wrangler deploy -c workers/opensky-proxy/wrangler.jsonc"
+    "opensky:proxy:worker": "npx wrangler deploy -c workers/opensky-proxy/wrangler.jsonc",
+    "tunnel": "node scripts/cloudflare-quick-tunnel.mjs",
+    "test": "node --test scripts/cloudflare-quick-tunnel.test.mjs"
   },
   "dependencies": {
     "@turf/bearing": "^7.4.0",

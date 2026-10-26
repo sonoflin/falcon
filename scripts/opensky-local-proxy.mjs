@@ -10,8 +10,13 @@
  * - /health and /probe never mint tokens or expose secrets
  *
  * Env: OPENSKY_CLIENT_ID, OPENSKY_CLIENT_SECRET, PROXY_SECRET (or OPENSKY_PROXY_SECRET),
- *      PORT (default 8787), HOST (default 0.0.0.0 for containers; use 127.0.0.1 locally),
+ *      PORT (default 8787), HOST (default 127.0.0.1; containers set 0.0.0.0),
  *      optional CREDENTIALS_JSON, optional OPENSKY_EGRESS_PROXY_*.
+ *
+ * Do not publish this process with `cloudflared tunnel --url`. A protected
+ * Quick Tunnel (--allowed-mail, cloudflared 2026.9.3+) only admits interactive
+ * browsers, so Vercel cannot call /token or /api. Use OPENSKY_EGRESS_PROXY_*
+ * on the app host instead. `npm run tunnel` refuses ports 8787 and 8791.
  */
 import http from "node:http";
 import fs from "node:fs";

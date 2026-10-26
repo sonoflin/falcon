@@ -9,3 +9,7 @@
 #
 # Health: GET /health (no secrets). Probe: GET /probe (reachability only).
 # Proxied: POST /token, GET /api/... — require X-Proxy-Secret.
+#
+# Do not put this service behind a Cloudflare Quick Tunnel. --allowed-mail
+# (cloudflared 2026.9.3+) is an interactive browser PIN and Vercel cannot
+# complete it. An unprotected trycloudflare.com URL is not a production path.

@@ -113,6 +113,16 @@ export default function AboutPage() {
               a one-off preview URL.
             </li>
             <li>
+              A temporary preview may use a protected Cloudflare Quick Tunnel.
+              Allow both{" "}
+              <span className="font-mono text-[0.92em]">*.trycloudflare.com</span>{" "}
+              and{" "}
+              <span className="font-mono text-[0.92em]">login.trycloudflare.com</span>{" "}
+              (the email one-time PIN page). The content security policy stays
+              limited to this host. The login page is a separate site and is not
+              added to that policy.
+            </li>
+            <li>
               Security contact and policy:{" "}
               <a
                 className="text-teal-900 underline underline-offset-2 hover:text-teal-800"
